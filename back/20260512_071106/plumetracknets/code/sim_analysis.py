@@ -156,7 +156,7 @@ def get_continuous_chunks(array, array2=None, jump=1, return_index=False):
 
 
 def load_plume(
-    dataset='constantx20b5', 
+    dataset='constant', 
     t_val_min=None,
     t_val_max=None,
     env_dt=0.04,
@@ -185,7 +185,7 @@ def load_plume(
 
     ## Downsample to env_dt!
     env_dt_int = int(env_dt*100)
-    assert env_dt_int in [2, 4, 5, 10, 50] # Limit downsampling to these for now!
+    assert env_dt_int in [2, 4, 5, 10] # Limit downsampling to these for now!
     if 'tidx' not in data_wind.columns:
     	data_wind['tidx'] = (data_wind['time']*100).astype(int)
     if 'tidx' not in data_puffs.columns:
@@ -206,7 +206,7 @@ def load_plume(
         print("Applying radius_multiplier", radius_multiplier)
         data_puffs.loc[:,'radius'] *= radius_multiplier
 
-    min_radius = 0.02
+    min_radius = 0.01
 
     # Adjust diffusion rate
     if diffusion_multiplier != 1.0:

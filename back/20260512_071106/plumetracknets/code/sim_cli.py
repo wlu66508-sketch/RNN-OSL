@@ -80,7 +80,7 @@ import numpy as np
 # Parse CLI arguments
 parser = argparse.ArgumentParser(description='Generate plume simulations')
 parser.add_argument('--duration',  metavar='d',  type=int, 
-  help='simulation duration in seconds', default=200)
+  help='simulation duration in seconds', default=15)
 parser.add_argument('--cores',  metavar='c',  type=int, 
   help='number of cores to use', default=24)
 parser.add_argument('--dataset_name',  type=str, default='test')
@@ -88,24 +88,20 @@ parser.add_argument('--fname_suffix',  type=str, default='')
 parser.add_argument('--dt',  type=float, 
 	help='time per step (seconds)', default=0.01)
 parser.add_argument('--wind_magnitude',  type=float, 
-	help='m/s', default=2.0)
+	help='m/s', default=0.1)
 parser.add_argument('--wind_y_varx',  type=float, default=1.0)
 parser.add_argument('--birth_rate',  type=float, 
-	help='poisson birth_rate parameter', default=1.0)
-parser.add_argument('--seed', type=int, default=config.seed_global,
-	help='random seed for wind targets and puff randomness')
+	help='poisson birth_rate parameter', default=0.2)
 parser.add_argument('--outdir',  type=str, default=config.datadir)
 
 args = parser.parse_args()
-np.random.seed(args.seed)
 print(args)
 
 wind_df = sim_utils.get_wind_xyt(
 	args.duration+1, 
 	dt=args.dt,
 	wind_magnitude=args.wind_magnitude,
-	regime=args.dataset_name,
-	seed=args.seed
+	regime=args.dataset_name
 	)
 wind_df['tidx'] = np.arange(len(wind_df), dtype=int) 
 fname = f'{args.outdir}/wind_data_{args.dataset_name}{args.fname_suffix}.pickle'
@@ -151,3 +147,4 @@ if 'switch' in args.dataset_name:
     ax.set_xlim(-1, +10) # if switching
     ax.set_ylim(-5, +5) # if switching
 fig.savefig(f'{args.outdir}/{args.dataset_name}{args.fname_suffix}_t{t_val:3.3f}z.png')
+

@@ -24,7 +24,7 @@ class PlumeEnvironment(gym.Env):
   def __init__(self, 
     t_val_min=60.00, 
     sim_steps_max=300, # steps
-    reset_offset_tmax=80, # seconds; max secs for initial offset from t_val_min
+    reset_offset_tmax=30, # seconds; max secs for initial offset from t_val_min
     dataset='constantx20b5',
     move_capacity=2.0, # Max agent speed in m/s
     turn_capacity=6.25*np.pi, # Max agent CW/CCW turn per second
@@ -218,12 +218,6 @@ class PlumeEnvironment(gym.Env):
     t_vals_puffs = self.data_puffs['time'].unique()
     print("puffs: t_val_diff", (t_vals_puffs[2] - t_vals_puffs[1]), "env_dt", self.dt)
     self.tidxs = self.data_wind['tidx'].tolist()
-
-  def seed(self, seed=None):
-    seed = config.seed_global if seed is None else seed
-    np.random.seed(seed)
-    self.np_random = np.random.RandomState(seed)
-    return [seed]
 
   def reload_dataset(self):
     self.set_dataset(self.dataset)
@@ -814,9 +808,6 @@ class PlumeFrameStackEnvironment(gym.Env):
         self.stackedobs[...] = 0
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs
-
-    def seed(self, seed=None):
-        return self.venv.seed(seed)
 
     def render(self, mode):
         self.venv.render(mode)

@@ -8,22 +8,12 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import VecEnvWrapper, DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
-try:
-    from stable_baselines3.common.vec_env.patch_gym import _patch_env
-except ImportError:
-    _patch_env = None
 
 import sys, os
 sys.path.append('../')
 sys.path.append('../../')
 
 import importlib
-
-def patch_env_for_sb3(env):
-    if _patch_env is None:
-        return env
-    return _patch_env(env)
-
 
 def make_env(env_id, seed, rank, log_dir, allow_early_resets, args=None):
 
@@ -110,8 +100,6 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets, args=None):
 
         if str(env.__class__.__name__).find('TimeLimit') >= 0:
             env = TimeLimitMask(env)
-
-        env = patch_env_for_sb3(env)
 
         if log_dir is not None:
             env = Monitor(

@@ -208,7 +208,7 @@ def get_args():
     parser.add_argument('--stride', type=int, default=1)
 
     # Curriculum hack
-    parser.add_argument('--dataset', type=str, nargs='+', default=['constantx20b5'])
+    parser.add_argument('--dataset', type=str, nargs='+', default=['constantx5b5'])
     parser.add_argument('--num-env-steps', type=int, nargs='+', default=[10e6])
     parser.add_argument('--qvar', type=float, nargs='+', default=[0.0])
     parser.add_argument('--birthx',  type=float, nargs='+', default=[1.0])
@@ -224,11 +224,9 @@ def get_args():
     parser.add_argument('--auto_reward',  type=bool, default=False)
     parser.add_argument('--loc_algo',  type=str, default='uniform')
     parser.add_argument('--time_algo',  type=str, default='uniform')
-    parser.add_argument('--env_dt',  type=float, default=0.5)
-    parser.add_argument('--sim_steps_max', type=int, default=300)
-    parser.add_argument('--reset_offset_tmax', type=float, default=80.0)
+    parser.add_argument('--env_dt',  type=float, default=0.04)
     parser.add_argument('--outsuffix',  type=str, default='')
-    parser.add_argument('--walking',  type=bool, default=True)
+    parser.add_argument('--walking',  type=bool, default=False)
     parser.add_argument('--radiusx',  type=float, default=1.0)
     parser.add_argument('--diffusion_min',  type=float, default=1.0)
     parser.add_argument('--diffusion_max',  type=float, default=1.0)
@@ -589,9 +587,12 @@ def main():
 
     # Evaluation
     print("Starting evaluation")
-    datasets = ['switch45x20b5',
-                'constantx20b5',
-                'noisy3x20b5']
+    datasets = ['switch15x5b5', 
+                'switch30x5b5', 
+                'switch45x5b5', 
+                'constantx5b5', 
+                'noisy3x5b5', 
+                'noisy6x5b5']
     # if args.dataset not in datasets:
     #     datasets.append(args.dataset)
     #     datasets.reverse() # Do training data test first
@@ -608,7 +609,7 @@ def main():
     for ds in datasets:
       print(f"Evaluating on dataset: {ds}")
       args.dataset = ds
-      test_sparsity = True if 'constantx20b5' in args.dataset else False
+      test_sparsity = True if 'constantx5b5' in args.dataset else False
       test_sparsity = False if 'short' in args.eval_type else test_sparsity
       evalCli.eval_loop(args, actor_critic, test_sparsity=test_sparsity)
 

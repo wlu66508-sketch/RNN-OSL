@@ -225,8 +225,6 @@ def get_args():
     parser.add_argument('--loc_algo',  type=str, default='uniform')
     parser.add_argument('--time_algo',  type=str, default='uniform')
     parser.add_argument('--env_dt',  type=float, default=0.5)
-    parser.add_argument('--sim_steps_max', type=int, default=300)
-    parser.add_argument('--reset_offset_tmax', type=float, default=80.0)
     parser.add_argument('--outsuffix',  type=str, default='')
     parser.add_argument('--walking',  type=bool, default=True)
     parser.add_argument('--radiusx',  type=float, default=1.0)

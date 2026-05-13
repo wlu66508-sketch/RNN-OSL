@@ -91,21 +91,17 @@ parser.add_argument('--wind_magnitude',  type=float,
 	help='m/s', default=2.0)
 parser.add_argument('--wind_y_varx',  type=float, default=1.0)
 parser.add_argument('--birth_rate',  type=float, 
-	help='poisson birth_rate parameter', default=1.0)
-parser.add_argument('--seed', type=int, default=config.seed_global,
-	help='random seed for wind targets and puff randomness')
+	help='poisson birth_rate parameter', default=0.2)
 parser.add_argument('--outdir',  type=str, default=config.datadir)
 
 args = parser.parse_args()
-np.random.seed(args.seed)
 print(args)
 
 wind_df = sim_utils.get_wind_xyt(
 	args.duration+1, 
 	dt=args.dt,
 	wind_magnitude=args.wind_magnitude,
-	regime=args.dataset_name,
-	seed=args.seed
+	regime=args.dataset_name
 	)
 wind_df['tidx'] = np.arange(len(wind_df), dtype=int) 
 fname = f'{args.outdir}/wind_data_{args.dataset_name}{args.fname_suffix}.pickle'

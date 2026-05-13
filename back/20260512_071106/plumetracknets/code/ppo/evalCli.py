@@ -129,7 +129,7 @@ def evaluate_agent(actor_critic, env, args):
         venv.time_algo = 'fixed' 
         
         grids = []
-        for venv.fixed_x in [7.0, 8.5, 10.0]:
+        for venv.fixed_x in [4.0, 6.0, 8.0]:
           for venv.fixed_time_offset in [0.0, 1.0]: # time_offset
             env.reset()
 
@@ -423,7 +423,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='eval')
     parser.add_argument('--seed', type=int, default=137)
     parser.add_argument('--algo', default='ppo')
-    parser.add_argument('--dataset', default='constantx20b5')
+    parser.add_argument('--dataset', default='constantx5b5')
     parser.add_argument('--model_fname')
     parser.add_argument('--test_episodes', type=int, default=100)
     parser.add_argument('--viz_episodes', type=int, default=10)
@@ -442,11 +442,11 @@ if __name__ == "__main__":
 
     np.random.seed(args.seed)
     args.env_name = 'plume'
-    args.env_dt = 0.5
+    args.env_dt = 0.04
     args.turnx = 1.0
     args.movex = 1.0
     args.birthx = 1.0
-    args.loc_algo = 'uniform'
+    args.loc_algo = 'quantile'
     args.time_algo = 'uniform'
     args.diff_max = 0.8
     args.diff_min = 0.8
@@ -455,7 +455,7 @@ if __name__ == "__main__":
     args.wind_rel = True
     args.action_feedback = False
     # args.action_feedback = True
-    args.walking = True
+    args.walking = False
     args.radiusx = 1.0
     args.r_shaping = ['step'] # redundant
     args.rewardx = 1.0

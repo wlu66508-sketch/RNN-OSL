@@ -219,12 +219,6 @@ class PlumeEnvironment(gym.Env):
     print("puffs: t_val_diff", (t_vals_puffs[2] - t_vals_puffs[1]), "env_dt", self.dt)
     self.tidxs = self.data_wind['tidx'].tolist()
 
-  def seed(self, seed=None):
-    seed = config.seed_global if seed is None else seed
-    np.random.seed(seed)
-    self.np_random = np.random.RandomState(seed)
-    return [seed]
-
   def reload_dataset(self):
     self.set_dataset(self.dataset)
 
@@ -814,9 +808,6 @@ class PlumeFrameStackEnvironment(gym.Env):
         self.stackedobs[...] = 0
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs
-
-    def seed(self, seed=None):
-        return self.venv.seed(seed)
 
     def render(self, mode):
         self.venv.render(mode)

@@ -16,57 +16,13 @@
 
 
 
-## Outdoor three-stage curriculum
-
-Generate 50 seeds for each 300s scene. The new crosswind scenes keep puff birth, puff random y-motion, radius growth, and diffusion handling unchanged; only the background wind changes.
-
-````bash
-cd code
-
-for SEED in $(seq 1 50); do
-  for DATASET in constant light_crosswind target_crosswind; do
-    python -u sim_cli.py \
-      --duration 300 \
-      --dataset_name ${DATASET} \
-      --wind_magnitude 2.0 \
-      --birth_rate 1.0 \
-      --fname_suffix x20b5_s${SEED} \
-      --seed ${SEED} > ${DATASET}x20b5_s${SEED}.log 2>&1
-  done
-done
-````
-
-Scene definitions:
-
-````bash
-# Stage 1: constant, vx=2.0, vy=0.0
-# Train with birthx 0.3, so each episode keeps 0.3~1.0 of puffs.
-
-# Stage 2: light_crosswind, vx=2.0
-# vy_target updates every 20~40s in [-0.2, +0.2].
-# vy follows target with first-order exponential smoothing, tau=5s.
-# Train with birthx 0.6, so each episode keeps 0.6~1.0 of puffs.
-
-# Stage 3: target_crosswind, vx=2.0
-# vy_target updates every 20~40s in [-0.35, +0.35].
-# vy follows target with first-order exponential smoothing, tau=5s.
-# Train with birthx 0.8, so each episode keeps 0.8~1.0 of puffs.
-````
-
-For a 150s episode at `env_dt=0.5`, keep:
-
-````bash
---sim_steps_max 300 --env_dt 0.5
-````
-
-
 ## RNN
 ````bash
 NUMPROC=4 # Walle/Weekend
 SHAPE="step oob"
 
 BIRTHX="0.3 0.8" #  Original Config
-DATASET="constantx20b5 noisy3x20b5"
+DATASET="constantx5b5 noisy3x5b5"
 STEPS="1000000 4000000"
 VARX="2.0 0.5"
 DMAX="0.8 0.8"
@@ -100,8 +56,6 @@ for SEED in $(seq 14); do
     nice python -u main.py --env-name plume \
       --recurrent-policy \
       --dataset $DATASET \
-      --walking True \
-      --env_dt 0.5 \
       --num-env-steps ${STEPS} \
       --birthx $BIRTHX  \
       --flipping True \
@@ -140,7 +94,7 @@ tail -f ${SAVEDIR}/*.log
 NUMPROC=1 # Mycroft Weeknight
 SHAPE="step oob"
 BIRTHX="0.3 1.0"
-DATASET="constantx20b5 noisy3x20b5"
+DATASET="constantx5b5 noisy3x5b5"
 VARX="1.0 0.5"
 STEPS="100000 2000000"
 DMAX="0.8 0.8"
@@ -148,7 +102,7 @@ DMIN="0.8 0.4"
 
 SHAPE="step oob"
 BIRTHX="1.0"
-DATASET="noisy3x20b5"
+DATASET="noisy3x5b5"
 VARX="0.5"
 STEPS="2000000"
 DMAX="0.8"
@@ -182,8 +136,6 @@ for SEED in $(seq 14); do
     nice python -u main.py --env-name plume \
       --stacking ${STACK} \
       --dataset $DATASET \
-      --walking True \
-      --env_dt 0.5 \
       --num-env-steps ${STEPS} \
       --birthx $BIRTHX  \
       --flipping True \
@@ -209,3 +161,4 @@ done
 
 tail -f ${SAVEDIR}/*.log
 ````
+

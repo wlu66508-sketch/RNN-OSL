@@ -36,34 +36,6 @@ from numba import jit # TODO
 # birth_rate = simc['birth_rate']
 
 
-def get_wind_vectors_smooth_crosswind(T, vx_base, vy_limit,
-                                      switch_min=20.0, switch_max=40.0,
-                                      tau=5.0, local_state=None):
-    """Generate smooth lateral wind with a first-order low-pass target tracker."""
-    if local_state is None:
-        local_state = np.random.RandomState(0)
-
-    dt = float(T[1] - T[0]) if len(T) > 1 else 0.01
-    alpha = 1.0 - np.exp(-dt / tau)
-
-    wind_x = np.ones(len(T)) * vx_base
-    wind_y = np.zeros(len(T))
-
-    vy_target = local_state.uniform(-vy_limit, vy_limit)
-    next_switch_t = local_state.uniform(switch_min, switch_max)
-
-    for i, t in enumerate(T):
-        if t >= next_switch_t:
-            vy_target = local_state.uniform(-vy_limit, vy_limit)
-            next_switch_t = t + local_state.uniform(switch_min, switch_max)
-
-        if i > 0:
-            wind_y[i] = wind_y[i-1] + alpha * (vy_target - wind_y[i-1])
-
-    wind_y = np.clip(wind_y, -vy_limit, vy_limit)
-    return wind_x, wind_y
-
-
 def get_wind_vectors_flexible(T, wind_magnitude, local_state=None, regime=None):
     '''
     T: 1D array of timestamps
@@ -71,27 +43,6 @@ def get_wind_vectors_flexible(T, wind_magnitude, local_state=None, regime=None):
     '''
     if local_state is None:
         local_state = np.random.RandomState(0)
-    regime = regime or 'constant'
-
-    if 'light_crosswind' in regime:
-        return get_wind_vectors_smooth_crosswind(
-            T,
-            vx_base=wind_magnitude,
-            vy_limit=0.20,
-            switch_min=20.0,
-            switch_max=40.0,
-            tau=5.0,
-            local_state=local_state)
-
-    if 'target_crosswind' in regime:
-        return get_wind_vectors_smooth_crosswind(
-            T,
-            vx_base=wind_magnitude,
-            vy_limit=0.35,
-            switch_min=20.0,
-            switch_max=40.0,
-            tau=5.0,
-            local_state=local_state)
 
     # Setup baseline wind vectors: L --> R with 
     wind_degrees = np.zeros(len(T))
@@ -180,8 +131,7 @@ def get_wind_vectors_flexible(T, wind_magnitude, local_state=None, regime=None):
     return wind_x, wind_y
 
 
-def get_wind_xyt(duration, dt, wind_magnitude, verbose=True, regime='noisy3',
-                 seed=None):
+def get_wind_xyt(duration, dt, wind_magnitude, verbose=True, regime='noisy3'):
     T = np.arange(0, duration, dt).astype('float64')
     if verbose:
         print("Generate and save wind data ... ")
@@ -193,9 +143,7 @@ def get_wind_xyt(duration, dt, wind_magnitude, verbose=True, regime='noisy3',
     #         switch_direction=switch_direction)
 
     # if flexible:
-    local_state = np.random.RandomState(config.seed_global if seed is None else seed)
-    wind_x, wind_y = get_wind_vectors_flexible(
-        T, wind_magnitude, local_state=local_state, regime=regime)
+    wind_x, wind_y = get_wind_vectors_flexible(T, wind_magnitude, regime=regime)
 
     data_wind = pd.DataFrame({'wind_x': wind_x[0:len(T)],
                               'wind_y': wind_y[0:len(T)],
@@ -233,7 +181,7 @@ def integrate_puff_from_birth(args):
     T, wind_x, wind_y, birth_index, seed = args
     # Simulate once
 
-    xyr_0 = [0,0,0.02] # initial x, y, radius
+    xyr_0 = [0,0,0.01] # initial x, y, radius
     dt = 0.01
     # wind_x, wind_y = get_wind_vectors_original(T, 
     #     local_state=local_state, 
@@ -294,7 +242,7 @@ def get_puffs_raw(T, wind_x, wind_y, birth_rate, ncores=2, verbose=True):
 def integrate_puff_from_birth_df(args):
     T, tidxs, wind_x, wind_y, wind_y_var, birth_index, puff_index, seed = args
 
-    xyr_0 = [0,0,0.02] # initial x, y, radius
+    xyr_0 = [0,0,0.01] # initial x, y, radius
     dt = 0.01
 
     # Add some y-direction variation per puff
@@ -384,7 +332,7 @@ def gen_puff_dict(puff_number, tidx):
      'time': np.float64(tidx)/100.,
      'x': 0.0,
      'y': 0.0,
-     'radius': 0.02,
+     'radius': 0.01,
      # 'x_minus_radius': -0.01,
      # 'x_plus_radius': 0.01,
      # 'y_minus_radius': -0.01,
@@ -440,7 +388,7 @@ def get_puffs_df_vector(wind_df, wind_y_var, birth_rate, verbose=True):
 
         tidx += 1
         wind_t = wind_df.query("tidx == @tidx").copy(deep=True).reset_index(drop=True)
-        if wind_t.shape[0] != 1:
+        if wind_t.shape[0] is not 1:
             print("Likely numerical error!:", tidx, wind_t)
 
     # Gather data and post-process float format
@@ -458,3 +406,4 @@ def get_puffs_df_vector(wind_df, wind_y_var, birth_rate, verbose=True):
             puffs_df[col] = puffs_df[col].astype('float16') # Use lightest floats
     assert n_times_pre == len(puffs_df['time'].unique()) # Make sure compression lossless
     return puffs_df
+

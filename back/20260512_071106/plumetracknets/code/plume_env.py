@@ -24,17 +24,17 @@ class PlumeEnvironment(gym.Env):
   def __init__(self, 
     t_val_min=60.00, 
     sim_steps_max=300, # steps
-    reset_offset_tmax=80, # seconds; max secs for initial offset from t_val_min
-    dataset='constantx20b5',
+    reset_offset_tmax=30, # seconds; max secs for initial offset from t_val_min
+    dataset='constantx5b5',
     move_capacity=2.0, # Max agent speed in m/s
     turn_capacity=6.25*np.pi, # Max agent CW/CCW turn per second
-    wind_obsx=3.0, # normalize/divide wind observations by this quantity (move_capacity + wind_max) 
+    wind_obsx=1.0, # normalize/divide wind observations by this quantity (move_capacity + wind_max) 
     movex=1.0, # move_max multiplier for tuning
     turnx=1.0, # turn_max multiplier for tuning
     birthx=1.0, # per-episode puff birth rate sparsity minimum
     birthx_max=1.0, # overall odor puff birth rate sparsity max
-    env_dt=0.5,
-    loc_algo='uniform',
+    env_dt=0.04,
+    loc_algo='quantile',
     qvar=1.0, # Variance of init. location; higher = more off-plume initializations
     time_algo='uniform',
     angle_algo='uniform',
@@ -49,8 +49,8 @@ class PlumeEnvironment(gym.Env):
     rewardx=1.0, # scale reward for e.g. A3C
     rescale=False, # rescale/normalize input/outputs [redundant?]
     squash_action=False, # apply tanh and rescale (useful with PPO)
-    walking=True,
-    walk_move=0.5, # m/s
+    walking=False,
+    walk_move=0.05, # m/s (x100 for cm/s)
     walk_turn=1.0*np.pi, # radians/sec
     radiusx=1.0, 
     diffusion_min=1.00, 
@@ -197,7 +197,7 @@ class PlumeEnvironment(gym.Env):
         self.turn_capacity = walk_turn 
         self.move_capacity = walk_move 
         self.homed_radius = 0.02 # m i.e. 18cm walk from 0.20m (flying "homed" distance)
-        self.stray_max = 2.0 # meters; keep the same tolerance as flying
+        self.stray_max = 0.05 # meters
         # self.rewards['tick'] = -1/self.episode_steps_max
 
   def set_dataset(self, dataset):
@@ -211,6 +211,8 @@ class PlumeEnvironment(gym.Env):
         diffusion_multiplier=self.diffusion_max,
         radius_multiplier=self.radiusx,
         )
+    if self.walking:
+        self.data_puffs_all = self.data_puffs_all.query('x <= 0.5')
     self.data_puffs = self.data_puffs_all.copy() # trim this per episode
     self.data_wind = self.data_wind_all.copy() # trim/flip this per episode
     self.t_vals = self.data_wind['time'].tolist()
@@ -218,12 +220,6 @@ class PlumeEnvironment(gym.Env):
     t_vals_puffs = self.data_puffs['time'].unique()
     print("puffs: t_val_diff", (t_vals_puffs[2] - t_vals_puffs[1]), "env_dt", self.dt)
     self.tidxs = self.data_wind['tidx'].tolist()
-
-  def seed(self, seed=None):
-    seed = config.seed_global if seed is None else seed
-    np.random.seed(seed)
-    self.np_random = np.random.RandomState(seed)
-    return [seed]
 
   def reload_dataset(self):
     self.set_dataset(self.dataset)
@@ -308,18 +304,18 @@ class PlumeEnvironment(gym.Env):
     loc_xy = None
     if 'uniform' in algo:
         loc_xy = np.array([
-            np.random.uniform(7.0, 10.0),
+            2 + np.random.uniform(-1, 1), 
             np.random.uniform(-0.5, 0.5)])
 
         if self.walking:
             loc_xy = np.array([
-              np.random.uniform(7.0, 10.0),
-              np.random.uniform(-0.5, 0.5)])
+              0.2 + np.random.uniform(-0.1, 0.1), 
+              np.random.uniform(-0.05, 0.05)])
 
     if 'linear' in algo:
         # TODO
         loc_xy = np.array([
-            np.random.uniform(7.0, 10.0),
+            2 + np.random.uniform(-1, 1), 
             np.random.uniform(-0.5, 0.5)])
 
     if 'quantile' in algo:
@@ -375,7 +371,7 @@ class PlumeEnvironment(gym.Env):
     return agent_angle
 
   def diffusion_adjust(self, diffx):
-    min_radius = 0.02
+    min_radius = 0.01
     self.data_puffs.loc[:,'radius'] -= min_radius # subtract initial radius
     self.data_puffs.loc[:,'radius'] *= diffx/self.diffusion_max  # adjust 
     self.data_puffs.loc[:,'radius'] += min_radius # add back initial radius
@@ -814,9 +810,6 @@ class PlumeFrameStackEnvironment(gym.Env):
         self.stackedobs[...] = 0
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs
-
-    def seed(self, seed=None):
-        return self.venv.seed(seed)
 
     def render(self, mode):
         self.venv.render(mode)

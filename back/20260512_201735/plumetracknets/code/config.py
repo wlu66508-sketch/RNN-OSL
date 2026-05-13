@@ -6,7 +6,11 @@ import matplotlib
 
 import socket
 MACHINE = socket.gethostname().lower()
-datadir = '/mnt/hgfs/Desktop/RNN_OSL/'
+datadir = '/home/satsingh/plume/plumedata/'
+if MACHINE == 'mycroft':
+	datadir = '/data/users/satsingh/plumedata/'
+if (MACHINE == 'salarian') or (MACHINE == 'cylon'):
+	datadir = '/data1/users/satsingh/plumedata/'
 
 seed_global = 137
 
