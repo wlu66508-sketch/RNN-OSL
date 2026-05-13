@@ -80,14 +80,6 @@ env = {
 	# 'stray_distance': 2.0, # meters
     'odor_threshold': 0.0001, # arbit units
     # 'odor_threshold': 1e-8, # arbit units
-    'puff_initial_radius': 0.05, # meters; matches GADEN filament_initial_std=5cm
-    'puff_diffusion_gamma': 0.002, # m^2/s; matches GADEN filament_growth_gamma=20cm^2/s
-    'plume_trim_bounds': {
-        'x_min': -2,
-        'x_max': 30,
-        'y_min': -15,
-        'y_max': 15,
-        },
 	'arena_bounds': {
 		'x_min':-5, 
 		'x_max':20, 

@@ -1,0 +1,410 @@
+阶段	数据集	训练步数	birthx	qvar	diff_max	diff_min
+1	constantx5b5	1,000,000	0.3	2.0	0.8	0.7
+2	noisy3x5b5	4,000,000	0.8	0.5	0.8	0.4
+
+算法：PPO
+网络：VRNN，也就是普通 RNN
+hidden_size：64
+并行环境数 NUMPROC：4
+训练 seed 数：14 个
+reward shaping：step oob
+birthx：每个 episode 随机保留 puff 的最低比例
+qvar：初始位置随机范围，越大越容易偏离 plume
+diff_min/diff_max：每个 episode 随机扩散倍率范围
+birthx：每个 episode 随机保留 puff 的最低比例
+qvar：初始位置随机范围，越大越容易偏离 plume
+diff_min/diff_max：每个 episode 随机扩散倍率范围
+birthx：每个 episode 随机保留 puff 的最低比例
+qvar：初始位置随机范围，越大越容易偏离 plume
+diff_min/diff_max：每个 episode 随机扩散倍率范围
+
+
+
+
+
+我按当前仓库代码整理了三块：数据生成、训练、评估。先说一个小结论：仓库里没有搜到 vji/VJI 这个名字，我下面按 sim_cli.py 的 plume 数据生成理解。
+
+数据生成
+
+来源：sim_cli.py (line 82)、sim_utils.py (line 1)、0_plume_prereqs.md (line 74)
+
+sim_cli.py 默认参数：
+
+text
+
+
+
+duration=15
+cores=24              # 当前 vector 版本基本不用这个 cores
+dataset_name='test'
+fname_suffix=''
+dt=0.01
+wind_magnitude=0.1
+wind_y_varx=1.0
+birth_rate=0.2
+outdir=config.datadir # 默认 /home/satsingh/plume/plumedata/，按机器名可能改
+seed_global=137       # config.py 里设置
+
+
+
+文档里实际用于生成训练/评估数据的命令参数：
+
+text
+
+
+
+dataset_name: noisy3, constant, switch45
+duration=120
+wind_magnitude=0.5
+birth_rate=1.0
+fname_suffix='x5b5'
+dt=0.01
+wind_y_varx=1.0       # 所以 wind_y_var = 0.5 / sqrt(1.0) = 0.5
+
+
+
+输出文件名是：
+
+text
+
+
+
+wind_data_{dataset_name}{fname_suffix}.pickle
+puff_data_{dataset_name}{fname_suffix}.pickle
+{dataset_name}{fname_suffix}_t*.png
+
+
+
+所以会生成类似：
+
+text
+
+
+
+constantx5b5
+noisy3x5b5
+switch45x5b5
+
+
+
+puff 生成内部参数：初始 puff 半径 0.01，半径增长 rdot=0.01，每 0.01s Euler 更新一次；每步新 puff 数量服从 Poisson(birth_rate)；puff 裁剪范围是 x<10, y<10, x>-2, y>-10。风场：constant 是 0 度恒定风；switch45 是后半段变成 45 度；noisy3 是每约 300 个仿真步切一次风向噪声，噪声裁到 [-60, 60] 度。
+
+训练
+
+来源：main.py (line 141)、3_plume_train.md (line 1)、plume_env.py (line 28)
+
+main.py 所有训练入口默认值：
+
+text
+
+
+
+algo='ppo', lr=7e-4, eps=1e-5, alpha=0.99, gamma=0.99
+use_gae=False, gae_lambda=0.95, entropy_coef=0.01
+value_loss_coef=0.5, max_grad_norm=0.5, clip_param=0.2
+seed=137, cuda_deterministic=False, num_processes=16
+num_steps=5, ppo_epoch=4, num_mini_batch=32
+log_interval=10, save_interval=100
+use_proper_time_limits=False, recurrent_policy=False
+use_linear_lr_decay=False
+env_name=None, log_dir='/tmp/gym/', save_dir='./trained_models/'
+dynamic=False, eval_type='fixed', eval_episodes=20, eval_interval=None
+weight_decay=0.0, rnn_type=None, hidden_size=64, betadist=False
+stacking=0, masking=None, stride=1
+dataset=['constantx5b5'], num_env_steps=[10e6]
+qvar=[0.0], birthx=[1.0], diff_max=[0.8], diff_min=[0.4]
+birthx_max=1.0, dryrun=False, curriculum=False
+turnx=1.0, movex=1.0, auto_movex=False, auto_reward=False
+loc_algo='uniform', time_algo='uniform', env_dt=0.04
+outsuffix='', walking=False, radiusx=1.0
+diffusion_min=1.0, diffusion_max=1.0
+r_shaping=['step'], wind_rel=True, action_feedback=False
+squash_action=False, flipping=False, odor_scaling=False
+stray_max=2.0, test_episodes=50, viz_episodes=10
+model_fname='', obs_noise=0.0, act_noise=0.0
+
+
+
+3_plume_train.md 里 RNN 实际覆盖参数：
+
+text
+
+
+
+RNNTYPE=VRNN
+NUMPROC=4
+SHAPE='step oob'
+DATASET='constantx5b5 noisy3x5b5'
+BIRTHX='0.3 0.8'
+STEPS='1000000 4000000'
+QVAR='2.0 0.5'
+DMAX='0.8 0.8'
+DMIN='0.7 0.4'
+HIDDEN=64
+weight_decay=0.0001
+seed=$RANDOM, 共跑 14 个
+recurrent_policy=True
+flipping=True
+odor_scaling=True
+squash_action=True
+num_mini_batch=4
+num_steps=2048
+lr=3e-4
+entropy_coef=0.005
+value_loss_coef=0.5
+ppo_epoch=10
+gamma=0.99
+gae_lambda=0.95
+use_gae=True
+use_linear_lr_decay=True
+
+
+
+MLP 段按脚本顺序，前一组变量会被后一组覆盖，所以实际生效是：
+
+text
+
+
+
+STACK in 02,04,06,08,10,12
+NUMPROC=1
+DATASET='noisy3x5b5'
+BIRTHX='1.0'
+STEPS='2000000'
+QVAR='0.5'
+DMAX='0.8'
+DMIN='0.3'
+HIDDEN=64
+weight_decay=0.0001
+seed=$RANDOM, 每个 STACK 跑 14 个
+其余 PPO 参数同 RNN：num_steps=2048, lr=3e-4, entropy=0.005 等
+
+
+
+环境固定参数：t_val_min=60s，sim_steps_max=300，reset_offset_tmax=30s，move_capacity=2.0 m/s，turn_capacity=6.25*pi rad/s，homed_radius=0.2m，odor_threshold=1e-4，arena 是 x=[-5,20], y=[-5,5]。动作是 2 维 [move, turn]，默认范围 [0,1]；观测是 [wind_x, wind_y, odor]，若 action_feedback=True 才变 5 维。
+
+注意：训练脚本传了 qvar/diff_max/diff_min，但当前 main.py 默认 loc_algo='uniform'、time_algo='uniform'，所以这些 curriculum 参数在默认训练命令里基本不参与初始位置/时间采样。它们不是 diffusion_min/diffusion_max；后者默认都是 1.0，训练脚本没有覆盖，所以物理 puff diffusion multiplier 固定为 1.0。
+
+评估
+
+来源：evalCli.py (line 424)、2_plume_eval.md (line 1)
+
+evalCli.py CLI 默认：
+
+text
+
+
+
+seed=137
+algo='ppo'
+dataset='constantx5b5'
+model_fname=None
+test_episodes=100
+viz_episodes=10
+fixed_eval=False
+test_sparsity=False
+diffusionx=1.0
+
+
+
+进入评估后强制设置：
+
+text
+
+
+
+env_name='plume', env_dt=0.04
+turnx=1.0, movex=1.0, birthx=1.0
+loc_algo='quantile', time_algo='uniform'
+diff_max=0.8, diff_min=0.8
+wind_rel=True, action_feedback=False, walking=False
+radiusx=1.0, r_shaping=['step'], rewardx=1.0
+squash_action=True
+diffusion_min=diffusionx, diffusion_max=diffusionx
+flipping=False, odor_scaling=False
+qvar=0.0, stray_max=2.0, birthx_max=1.0
+masking=None, stride=1, obs_noise=0.0, act_noise=0.0
+dynamic=False
+
+
+
+
+duration 120        仿真 120 秒
+wind_magnitude 0.5 风速大小 0.5 m/s
+birth_rate 1.0     每个仿真步 puff 生成的泊松参数
+fname_suffix x5b5  文件名后缀，拼到 dataset 后面
+
+
+
+优化三阶段训练方案
+
+
+cd /home/wanglu/code/DQN/plumetracknets/code
+
+OUTDIR=/mnt/hgfs/Desktop/RNN_OSL
+mkdir -p ${OUTDIR}/logs
+
+for SEED in $(seq 1 50); do
+  for DATASET in constant light_crosswind target_crosswind; do
+    python -u sim_cli.py \
+      --duration 300 \
+      --dataset_name ${DATASET} \
+      --wind_magnitude 2.0 \
+      --birth_rate 1.0 \
+      --fname_suffix x20b5_s${SEED} \
+      --seed ${SEED} \
+      --outdir ${OUTDIR} \
+      > ${OUTDIR}/logs/${DATASET}x20b5_s${SEED}.log 2>&1
+  done
+done
+
+wanglu@wanglu-virtual-machine:~$ cd /home/wanglu/code/DQN/plumetracknets/code
+
+MPLCONFIGDIR=/tmp /home/wanglu/anaconda3/bin/python sim_cli.py \
+  --duration 120 \
+  --dataset_name constant \
+  --fname_suffix x20b5 \
+  --wind_magnitude 2.0 \
+  --wind_y_varx 16 \
+  --birth_rate 1.0 \
+  --outdir /mnt/hgfs/Desktop/RNN_OSL
+
+
+
+
+
+
+cd /home/wanglu/code/DQN/plumetracknets/code/ppo
+
+NUMPROC=1
+SAVEDIR=/mnt/hgfs/Desktop/RNN_OSL/trained_models/Test3Stage
+mkdir -p ${SAVEDIR}
+
+python -u main.py --env-name plume \
+  --recurrent-policy \
+  --dataset constantx20b5_s1 light_crosswindx20b5_s1 target_crosswindx20b5_s1 \
+  --walking True \
+  --env_dt 0.5 \
+  --sim_steps_max 300 \
+  --reset_offset_tmax 80 \
+  --num-env-steps 10000 10000 10000 \
+  --birthx 0.3 0.6 0.8 \
+  --qvar 2.0 1.0 0.5 \
+  --diff_max 0.8 0.8 0.8 \
+  --diff_min 0.7 0.4 0.4 \
+  --flipping True \
+  --odor_scaling True \
+  --r_shaping step oob \
+  --algo ppo \
+  --seed 137 \
+  --squash_action True \
+  --num-processes ${NUMPROC} \
+  --num-mini-batch ${NUMPROC} \
+  --rnn_type VRNN \
+  --hidden_size 64 \
+  --weight_decay 0.0001 \
+  --eval_type skip \
+  --save-dir ${SAVEDIR} \
+  --outsuffix test_3stage \
+  --use-gae --num-steps 2048 --lr 3e-4 --entropy-coef 0.005 --value-loss-coef 0.5 --ppo-epoch 10 --gamma 0.99 --gae-lambda 0.95 --use-linear-lr-decay
+
+
+
+优化三阶段训练方案
+
+
+
+
+
+cd /home/wanglu/code/DQN/plumetracknets/code/ppo
+
+DATASET=""
+BIRTHX=""
+QVAR=""
+STEPS=""
+DMAX=""
+DMIN=""
+
+for SEED in $(seq 1 50); do
+  DATASET="${DATASET} constantx20b5_s${SEED}"
+  BIRTHX="${BIRTHX} 0.3"
+  QVAR="${QVAR} 2.0"
+  STEPS="${STEPS} 20000"
+  DMAX="${DMAX} 0.8"
+  DMIN="${DMIN} 0.7"
+done
+
+for SEED in $(seq 1 50); do
+  DATASET="${DATASET} light_crosswindx20b5_s${SEED}"
+  BIRTHX="${BIRTHX} 0.6"
+  QVAR="${QVAR} 1.0"
+  STEPS="${STEPS} 40000"
+  DMAX="${DMAX} 0.8"
+  DMIN="${DMIN} 0.4"
+done
+
+for SEED in $(seq 1 50); do
+  DATASET="${DATASET} target_crosswindx20b5_s${SEED}"
+  BIRTHX="${BIRTHX} 0.8"
+  QVAR="${QVAR} 0.5"
+  STEPS="${STEPS} 80000"
+  DMAX="${DMAX} 0.8"
+  DMIN="${DMIN} 0.4"
+done
+
+NUMPROC=4
+SAVEDIR=/mnt/hgfs/Desktop/RNN_OSL/trained_models/ThreeStageVRNN
+mkdir -p ${SAVEDIR}
+
+python -u main.py --env-name plume \
+  --recurrent-policy \
+  --dataset ${DATASET} \
+  --walking True \
+  --env_dt 0.5 \
+  --sim_steps_max 300 \
+  --reset_offset_tmax 80 \
+  --num-env-steps ${STEPS} \
+  --birthx ${BIRTHX} \
+  --qvar ${QVAR} \
+  --diff_max ${DMAX} \
+  --diff_min ${DMIN} \
+  --flipping True \
+  --odor_scaling True \
+  --r_shaping step oob \
+  --algo ppo \
+  --seed 137 \
+  --squash_action True \
+  --num-processes ${NUMPROC} \
+  --num-mini-batch ${NUMPROC} \
+  --rnn_type VRNN \
+  --hidden_size 64 \
+  --weight_decay 0.0001 \
+  --eval_type skip \
+  --save-dir ${SAVEDIR} \
+  --outsuffix three_stage_50seed \
+  --use-gae --num-steps 2048 --lr 3e-4 --entropy-coef 0.005 --value-loss-coef 0.5 --ppo-epoch 10 --gamma 0.99 --gae-lambda 0.95 --use-linear-lr-decay \
+  > ${SAVEDIR}/three_stage_50seed.log 2>&1
+
+
+git config --global user.name "wlu66508-sketch"
+git config --global user.email "wlu66508@gmail.com"
+d /home/wanglu/code/DQN/plumetracknets
+
+git commit -m "Upload RNN-OSL project"
+git remote rename origin upstream
+git remote add origin https://github.com/wlu66508-sketch/RNN-OSL.git
+git branch -M main
+git push -u origin main
+
+
+
+
+
+
+
+
+
+
+
+
+

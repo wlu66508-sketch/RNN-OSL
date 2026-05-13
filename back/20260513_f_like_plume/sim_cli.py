@@ -89,8 +89,7 @@ parser.add_argument('--dt',  type=float,
 	help='time per step (seconds)', default=0.01)
 parser.add_argument('--wind_magnitude',  type=float, 
 	help='m/s', default=2.0)
-parser.add_argument('--wind_y_varx',  type=float, default=16.0,
-    help='wind_y_var is wind_magnitude/sqrt(wind_y_varx); default keeps 2m/s wind at 0.5')
+parser.add_argument('--wind_y_varx',  type=float, default=1.0)
 parser.add_argument('--birth_rate',  type=float, 
 	help='poisson birth_rate parameter', default=1.0)
 parser.add_argument('--seed', type=int, default=config.seed_global,

@@ -3,7 +3,6 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import os
 import sys
-import glob
 
 import pandas as pd
 import numpy as np
@@ -16,169 +15,6 @@ from pprint import pprint
 
 import config
 from scipy.spatial.distance import cdist 
-import sim_utils
-
-class DynamicPlume:
-  def __init__(self, 
-        sim_dt=0.01,
-        birth_rate=1.0,
-        env_dt=0.04,
-        birthx=1.0, # per-episode puff birth rate sparsity minimum
-        birthx_max=1.0, # overall odor puff birth rate sparsity max
-        wind_speed=0.5,
-        wind_y_var=0.5,
-        qvar=0.0, # Variance of init. location; higher = more off-plume initializations
-        diff_max=0.8, # teacher curriculum
-        diff_min=0.4, # teacher curriculum
-        warmup=25, # warmup upto these many steps 
-        max_steps=300, # max steps in episode (used for switch_idxs, ok to run longer)
-        dataset=None, # optional: imitate a "dataset"
-        verbose=0):
-      super(DynamicPlume, self).__init__()
-
-      # Init 
-      # print(os.getcwd())
-      self.verbose = verbose
-      self.warmup = warmup
-      self.max_steps = max_steps
-      self.snapshots = self.init_snapshots(config.datadir)
-      self.birthx = birthx
-      self.steps_per_env_dt = 4 # env_dt/sim_dt hardcoded
-      self.birth_rate = birth_rate
-      self.wind_y_var = wind_y_var
-      self.wind_speed = wind_speed
-      self.wind_degree = 0
-      # self.switch_counts = [0]*6 + [i for i in range(1, 13)] # mix of constant & switch
-      self.switch_counts = [0, 0, 0, 1, 1, 1, 2, 4, 6, 8] # mix of constant & switch
-      if dataset is not None and 'constant' in dataset:
-        self.switch_counts = [0]
-      if dataset is not None and 'noisy' in dataset:
-        self.switch_counts = [0, 0, 1, 1, 1, 2, 3, 4, 5, 6] # mix of constant & switch
-
-      self.diff_min = diff_min
-      self.diff_max = diff_max
-      self.qvar = qvar
-      self.reset()
-
-  def init_snapshots(self, snapshots_dir):
-    fnames = list(glob.glob(f"{snapshots_dir}/*_snapshot.csv"))[:10]
-    if len(fnames) < 1:
-        print(len(fnames), snapshots_dir)
-    return [ pd.read_csv(x) for x in fnames ]
-
-  def sparsify(self, puff_df, birthx=1.0):
-    keep_idxs = puff_df['puff_number'].sample(frac=np.clip(birthx, 0.0, 1.0))
-    return puff_df.query("puff_number in @keep_idxs")
-
-  def reset(self):
-    self.ep_step = 0
-    self.wind = [0.5, 0.0]
-    self.wind_y_varx = np.random.uniform(low=0.8, high=1.2) # some randomness to how spread out the wind puffs will be
-    self.puffs = self.snapshots[ np.random.randint(0, len(self.snapshots)) ].copy(deep=True)
-    if np.random.uniform(0.0, 1.0) > 0.5: # Random flip
-        self.puffs.loc[:,'y'] *= 1
-    self.tidx = self.puffs['tidx'].unique().item()
-    self.switches_ep = np.random.choice(self.switch_counts)
-    self.switch_idxs = [] if self.switches_ep == 0 else np.random.randint(0, self.max_steps, self.switches_ep).tolist()
-    if self.switches_ep in [1, 2]:
-        self.switch_idxs = np.random.randint(0, int(self.max_steps/3), self.switches_ep).tolist()
-    # self.switch_p = self.switches_ep/self.max_steps
-    # Dynamic birthx for each episode
-    if self.switches_ep == 0:    
-        self.birthx_ep = np.random.uniform(low=self.birthx, high=1.0)
-    else:
-        self.birthx_ep = np.random.uniform(low=0.7, high=1.0)
-    if self.birthx_ep < 0.95:
-      self.puffs = self.sparsify(self.puffs, self.birthx_ep)
-    # Warmup
-    for i in range(np.random.randint(0, self.warmup)):
-        self.step()
-
-  def step(self):
-    self.ep_step += 1
-    # update puffs
-    wind_t = pd.Series({'wind_x': self.wind[0], 'wind_y': self.wind[1], 'time':(self.tidx+1)/100})
-    for i in range(self.steps_per_env_dt):
-        self.tidx += 1
-        self.puffs = sim_utils.manual_integrator(
-            self.puffs[['puff_number', 'time', 'tidx', 'x', 'y', 'radius']], 
-            wind_t, 
-            self.tidx, 
-            birth_rate=self.birth_rate*self.birthx_ep, 
-            wind_y_var=self.wind_y_var*self.wind_y_varx)
-    # update wind
-    # if self.switches_ep > 0 and np.random.uniform(low=0.0, high=1.0) <= self.switch_p:
-    if self.switches_ep > 0 and self.ep_step in self.switch_idxs:
-        self.wind_degree = np.random.normal(0, 60)
-        self.wind_degree = np.clip(self.wind_degree, -60, 60 )
-        # self.wind_degree = np.random.uniform(-60, 60)
-        wind_x = np.cos( self.wind_degree * np.pi / 180. )*self.wind_speed
-        wind_y = np.sin( self.wind_degree * np.pi / 180. )*self.wind_speed
-        if self.verbose > 0:
-            print(f"tidx: {self.tidx} - wind_degree:{self.wind_degree}")
-        self.wind = [wind_x, wind_y]
-
-
-  def get_abunchofpuffs(self, max_samples=300):  
-    # Z = self.puffs.query(f"tidx == {self.tidx}").loc[:,['x','y']]
-    Z = self.puffs.loc[:,['x','y']]
-    Z = Z.sample(n=max_samples, replace=False) if Z.shape[0] > max_samples else Z
-    return Z
-
-  def get_stray_distance(self, agent_location, max_samples=2000):
-    loc_x = agent_location[0]
-    loc_x_window = 1.0 # meters
-    # y_median = self.puffs.query("(x >= (@loc_x - @loc_x_window)) and (x <= (@loc_x + @loc_x_window))")['y'].median()
-    y_median = self.puffs.query("(x >= (@loc_x - @loc_x_window)) and (x <= (@loc_x + @loc_x_window))")['y'].mean()
-    y_median = 0 if np.isnan(y_median) else y_median
-    ystray = np.abs(agent_location[1] - y_median)
-    return ystray
-    # Z = self.get_abunchofpuffs(max_samples=max_samples)
-    # Y = cdist(Z.to_numpy(), np.expand_dims(agent_location,axis=0), metric='euclidean')
-    # try:
-    #     minY = min(Y) 
-    # except Exception as ex:
-    #     print(f"Exception: {ex}, t:{self.t_val:.2f}, tidx:{self.tidx}, {Z}")  
-    #     minY = np.array([0])      
-    # return minY[0] # return float not float-array
-
-
-  def get_current_wind_xy(self):
-    return self.wind
-
-  def get_initial_location(self, loc_algo):
-    # assume quantile loc_algo
-    q_curriculum = np.random.uniform(self.diff_min, self.diff_max)
-
-    Z = self.get_abunchofpuffs()
-    X_pcts = Z['x'].quantile([q_curriculum-0.1, q_curriculum]).to_numpy()
-    X_mean, X_var = X_pcts[1], X_pcts[1] - X_pcts[0]
-    # print("initial X mean, var, q: ", X_mean, X_var, q_curriculum)
-    Y_pcts = Z.query("(x >= (@X_mean - @X_var)) and (x <= (@X_mean + @X_var))")['y'].quantile([0.05,0.5]).to_numpy()
-    Y_pcts
-    Y_mean, Y_var = Y_pcts[1], min(1, Y_pcts[1] - Y_pcts[0]) # TODO: What was min for?
-    # print(Y_mean, Y_var)
-    varx = self.qvar 
-    loc_xy = np.array([X_mean + varx*X_var*np.random.randn(), 
-        Y_mean + varx*Y_var*np.random.randn()]) 
-    return loc_xy
-
-  def get_concentration(self, x_val, y_val, min_radius=None, extent=0.0):
-    if min_radius is None:
-        min_radius = float(config.env.get('puff_initial_radius', 0.05))
-    if 'concentration' not in self.puffs.columns:
-        self.puffs['x_minus_radius'] = self.puffs.x - self.puffs.radius
-        self.puffs['x_plus_radius'] = self.puffs.x + self.puffs.radius
-        self.puffs['y_minus_radius'] = self.puffs.y - self.puffs.radius
-        self.puffs['y_plus_radius'] = self.puffs.y + self.puffs.radius
-        self.puffs['concentration'] = (min_radius/self.puffs.radius)**3
-
-    # xval_ext = xval_ext
-    qx = "@x_val > x_minus_radius and @x_val < x_plus_radius"
-    qy = "@y_val > y_minus_radius and @y_val < y_plus_radius"
-    q = qx + ' and ' + qy
-    d = self.puffs.query(q)
-    return d.concentration.sum()
 
 class PlumeEnvironment(gym.Env):
   """
@@ -188,48 +24,53 @@ class PlumeEnvironment(gym.Env):
   def __init__(self, 
     t_val_min=60.00, 
     sim_steps_max=300, # steps
-    reset_offset_tmax=30, # seconds; max secs for initial offset from t_val_min
-    dataset=None,
-    move_capacity=2.5, # Max agent speed in m/s
+    reset_offset_tmax=80, # seconds; max secs for initial offset from t_val_min
+    dataset='constantx20b5',
+    move_capacity=2.0, # Max agent speed in m/s
     turn_capacity=6.25*np.pi, # Max agent CW/CCW turn per second
-    wind_obsx=1.0, # normalize/divide wind observations by this quantity (move_capacity + wind_max) 
+    wind_obsx=3.0, # normalize/divide wind observations by this quantity (move_capacity + wind_max) 
     movex=1.0, # move_max multiplier for tuning
     turnx=1.0, # turn_max multiplier for tuning
     birthx=1.0, # per-episode puff birth rate sparsity minimum
     birthx_max=1.0, # overall odor puff birth rate sparsity max
-    env_dt=0.04,
-    loc_algo='quantile',
+    env_dt=0.5,
+    loc_algo='uniform',
     qvar=1.0, # Variance of init. location; higher = more off-plume initializations
     time_algo='uniform',
     angle_algo='uniform',
-    homed_radius=0.5, # meters, at which to end flying episode
+    homed_radius=0.2, # meters, at which to end flying episode
     stray_max=2.0, # meters, max distance agent can stray from plume
     wind_rel=True, # Agent senses relative wind speed (not ground speed)
     auto_movex=False, # simple autocurricula for movex
     auto_reward=False, # simple autocurricula for reward decay
     diff_max=0.8, # teacher curriculum
     diff_min=0.4, # teacher curriculum
-    r_shaping=['step'], # 'step', 'end'
+    r_shaping=['step', 'oob'], # 'step', 'end'
     rewardx=1.0, # scale reward for e.g. A3C
     rescale=False, # rescale/normalize input/outputs [redundant?]
     squash_action=False, # apply tanh and rescale (useful with PPO)
-    walking=False,
-    walk_move=0.05, # m/s (x100 for cm/s)
+    walking=True,
+    walk_move=0.5, # m/s
     walk_turn=1.0*np.pi, # radians/sec
     radiusx=1.0, 
+    diffusion_min=1.00, 
+    diffusion_max=1.00, 
     action_feedback=False,
     flipping=False, # Generalization/reduce training data bias
     odor_scaling=False, # Generalization/reduce training data bias
     obs_noise=0.0, # Multiplicative: Wind & Odor observation noise.
     act_noise=0.0, # Multiplicative: Move & Turn action noise.
+    dynamic=False,
     seed=137,
     verbose=0):
     super(PlumeEnvironment, self).__init__()
 
+    assert dynamic is False
+    np.random.seed(seed)    
+    
     self.arguments = locals()
     print("PlumeEnvironment:", self.arguments)
-
-    np.random.seed(seed)    
+    
     self.verbose = verbose
     self.venv = self
     self.walking = walking
@@ -266,10 +107,19 @@ class PlumeEnvironment(gym.Env):
     self.radiusx = radiusx
     self.birthx = birthx
     self.birthx_max = birthx_max
+    self.diffusion_max = diffusion_max # Puff diffusion multiplier (initial)
+    self.diffusion_min = diffusion_min # Puff diffusion multiplier (reset-time)
     self.t_val_min = t_val_min
     self.episode_steps_max = sim_steps_max # Short training episodes to gather rewards
     self.t_val_max = self.t_val_min + self.reset_offset_tmax + 1.0*self.episode_steps_max/self.fps + 1.00
 
+    self.set_dataset(dataset)
+
+    # Correction for short simulations
+    if self.data_wind.shape[0] < self.episode_steps_max:
+      if self.verbose > 0:
+        print("Wind data available only up to {} steps".format(self.data_wind.shape[0]))
+      self.episode_steps_max = self.data_wind.shape[0]
 
     # Other initializations -- many redundant, see .reset() 
     # self.agent_location = np.array([1, 0]) # TODO: Smarter
@@ -279,12 +129,11 @@ class PlumeEnvironment(gym.Env):
     random_angle = np.pi * np.random.uniform(0, 2)
     self.agent_angle_radians = [np.cos(random_angle), np.sin(random_angle)] # Sin and Cos of angle of orientation
     self.step_offset = 0 # random offset per trial in reset()
-    self.t_val = 0.0
-    self.tidx = 0
+    self.t_val = self.t_vals[self.episode_step + self.step_offset] 
+    self.tidx = self.tidxs[self.episode_step + self.step_offset] 
     self.tidx_min_episode = self.tidx
     self.tidx_max_episode = self.tidx
-    self.wind_ground = 0.
-    self.odor_ground = 0.
+    self.wind_ground = None
     self.stray_distance = 0
     self.stray_distance_last = 0
     self.agent_velocity_last = np.array([0, 0]) # Maintain last timestep velocity (in absolute coordinates) for relative sensory observations
@@ -319,37 +168,83 @@ class PlumeEnvironment(gym.Env):
     self.arena_bounds = config.env['arena_bounds'] 
     self.homed_radius = homed_radius  # End session if dist(agent - source) < homed_radius
     self.rewards = {
-      'tick': -1/self.episode_steps_max,
+      'tick': -10/self.episode_steps_max,
       'homed': 101.0,
       }
-
-    # dynamic plume
-    self.dynamic = DynamicPlume(
-        env_dt=self.dt,
-        birthx=self.birthx, # per-episode puff birth rate sparsity minimum
-        birthx_max=self.birthx_max, # overall odor puff birth rate sparsity max
-        qvar=self.qvar, # Variance of init. location; higher = more off-plume initializations
-        diff_max=self.diff_max, # teacher curriculum
-        diff_min=self.diff_min, # teacher curriculum
-        dataset=dataset,
-        )
-
 
 
     # Define action and observation spaces
     # Actions:
     # Move [0, 1], with 0.0 = no movement
     # Turn [0, 1], with 0.5 = no turn... maybe change to [-1, 1]
-    self.action_space = spaces.Box(low=0, high=+1, shape=(2,), dtype=np.float32)
+    self.action_space = spaces.Box(low=0, high=+1,
+                                        shape=(2,), dtype=np.float32)
+    if self.rescale:
+        ## Rescaled to [-1,+1] to follow best-practices: 
+        # https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#tips-and-tricks-when-creating-a-custom-environment
+        # Both will first clip to [-1,+1] then map to [0,1] with all other code remaining same
+        self.action_space = spaces.Box(low=-1, high=+1,
+                                        shape=(2,), dtype=np.float32)
+
     # Observations
     # Wind velocity [-1, 1] * 2, Odor concentration [0, 1]
     obs_dim = 3 if not self.action_feedback else 3+2
     self.observation_space = spaces.Box(low=-1, high=+1,
-                                shape=(obs_dim,), dtype=np.float32)
+                                        shape=(obs_dim,), dtype=np.float32)
+
+    ######## Experimental "walking mode" ########
+    if self.walking:
+        self.turn_capacity = walk_turn 
+        self.move_capacity = walk_move 
+        self.homed_radius = 0.02 # m i.e. 18cm walk from 0.20m (flying "homed" distance)
+        self.stray_max = 2.0 # meters; keep the same tolerance as flying
+        # self.rewards['tick'] = -1/self.episode_steps_max
+
+  def set_dataset(self, dataset):
+    self.dataset = dataset
+    self.data_puffs_all, self.data_wind_all = sim_analysis.load_plume(
+        dataset=self.dataset, 
+        t_val_min=self.t_val_min, 
+        t_val_max=self.t_val_max,
+        env_dt=self.dt,
+        puff_sparsity=np.clip(self.birthx_max, a_min=0.01, a_max=1.00),
+        diffusion_multiplier=self.diffusion_max,
+        radius_multiplier=self.radiusx,
+        )
+    self.data_puffs = self.data_puffs_all.copy() # trim this per episode
+    self.data_wind = self.data_wind_all.copy() # trim/flip this per episode
+    self.t_vals = self.data_wind['time'].tolist()
+    print("wind: t_val_diff", (self.t_vals[2] - self.t_vals[1]), "env_dt", self.dt)
+    t_vals_puffs = self.data_puffs['time'].unique()
+    print("puffs: t_val_diff", (t_vals_puffs[2] - t_vals_puffs[1]), "env_dt", self.dt)
+    self.tidxs = self.data_wind['tidx'].tolist()
+
+  def seed(self, seed=None):
+    seed = config.seed_global if seed is None else seed
+    np.random.seed(seed)
+    self.np_random = np.random.RandomState(seed)
+    return [seed]
+
+  def reload_dataset(self):
+    self.set_dataset(self.dataset)
+
+  def set_difficulty(self, level, verbose=True): # Curriculum
+    """
+    Location distance as a form of curriculum learning
+    :level: in [0.0, 1.0] with 0.0 being easiest
+    """
+    if level < 0:
+        self.difficulty = self.diff_max
+    else:
+        level = np.clip(level, 0.0, 1.0)
+        self.difficulty = level
+    if verbose:
+        print("set_difficulty to", self.difficulty)
 
   def sense_environment(self):
     if (self.verbose > 1) and (self.episode_step >= self.episode_steps_max): # Debug mode
         pprint(vars(self))
+
     # Wind
     wind_absolute = self.wind_ground # updated by step()
     
@@ -370,10 +265,13 @@ class PlumeEnvironment(gym.Env):
 
     if self.verbose > 1:
         print('wind_observation', wind_observation)
+        print('t_val', self.t_val)
 
     # Odor
-    self.odor_ground = self.dynamic.get_concentration(self.agent_location[0], self.agent_location[1])
-    odor_observation = self.odor_ground 
+    # odor_observation = sim_analysis.get_concentration_at_point_in_time_pandas(
+    #     self.data_puffs, self.t_val, self.agent_location[0], self.agent_location[1])
+    odor_observation = sim_analysis.get_concentration_at_tidx(
+        self.data_puffs, self.tidx, self.agent_location[0], self.agent_location[1])
     if self.verbose > 1:
         print('odor_observation', odor_observation)
     if self.odor_scaling:
@@ -381,7 +279,7 @@ class PlumeEnvironment(gym.Env):
     odor_observation *= 1.0 + np.random.uniform(-self.obs_noise, +self.obs_noise) # Add observation noise
 
     odor_observation = 0.0 if odor_observation < config.env['odor_threshold'] else odor_observation
-    odor_observation = np.clip(odor_observation, 0.0, 1.0) # clip for neural net stability
+    odor_observation = np.clip(odor_observation, 0.0, 1.0) # clip
 
     # Return
     observation = np.array(wind_observation + [odor_observation]).astype(np.float32) # per Gym spec
@@ -389,26 +287,42 @@ class PlumeEnvironment(gym.Env):
         print('observation', observation)
     return observation
 
+  def get_abunchofpuffs(self, max_samples=300):  
+    # Z = self.data_puffs[self.data_puffs.time==self.t_val].loc[:,['x','y']]
+    # Z = self.data_puffs[self.data_puffs.tidx==self.tidx].loc[:,['x','y']]
+    Z = self.data_puffs.query(f"tidx == {self.tidx}").loc[:,['x','y']]
+    Z = Z.sample(n=max_samples, replace=False) if Z.shape[0] > max_samples else Z
+    return Z
+
+  def get_stray_distance(self):
+    Z = self.get_abunchofpuffs()
+    Y = cdist(Z.to_numpy(), np.expand_dims(self.agent_location,axis=0), metric='euclidean')
+    try:
+        minY = min(Y) 
+    except Exception as ex:
+        print(f"Exception: {ex}, t:{self.t_val:.2f}, tidx:{self.tidx}({self.tidx_min_episode}...{self.tidx_max_episode}), ep_step:{self.episode_step}, {Z}")  
+        minY = np.array([0])      
+    return minY[0] # return float not float-array
+
   def get_initial_location(self, algo):
     loc_xy = None
     if 'uniform' in algo:
         loc_xy = np.array([
-            2 + np.random.uniform(-1, 1), 
+            np.random.uniform(7.0, 10.0),
             np.random.uniform(-0.5, 0.5)])
 
         if self.walking:
             loc_xy = np.array([
-              0.2 + np.random.uniform(-0.1, 0.1), 
-              np.random.uniform(-0.05, 0.05)])
+              np.random.uniform(7.0, 10.0),
+              np.random.uniform(-0.5, 0.5)])
 
     if 'linear' in algo:
         # TODO
         loc_xy = np.array([
-            2 + np.random.uniform(-1, 1), 
+            np.random.uniform(7.0, 10.0),
             np.random.uniform(-0.5, 0.5)])
 
     if 'quantile' in algo:
-        assert False
         """ 
         Distance curriculum
         Start the agent at a location with random location with mean and var
@@ -425,6 +339,8 @@ class PlumeEnvironment(gym.Env):
         Y_mean, Y_var = Y_pcts[1], min(1, Y_pcts[1] - Y_pcts[0]) # TODO: What was min for?
         # print(Y_mean, Y_var)
         varx = self.qvar 
+        # if 'switch' in self.dataset: # Preferably start within/close to plume
+        #     varx = 0.1
         loc_xy = np.array([X_mean + varx*X_var*np.random.randn(), 
             Y_mean + varx*Y_var*np.random.randn()]) 
 
@@ -458,23 +374,70 @@ class PlumeEnvironment(gym.Env):
         agent_angle = np.array([np.cos(self.fixed_angle), np.sin(self.fixed_angle)]) # Sin and Cos of angle of orientation
     return agent_angle
 
+  def diffusion_adjust(self, diffx):
+    min_radius = float(config.env.get('puff_initial_radius', 0.05))
+    self.data_puffs.loc[:,'radius'] -= min_radius # subtract initial radius
+    self.data_puffs.loc[:,'radius'] *= diffx/self.diffusion_max  # adjust 
+    self.data_puffs.loc[:,'radius'] += min_radius # add back initial radius
+    # Fix other columns
+    self.data_puffs['x_minus_radius'] = self.data_puffs.x - self.data_puffs.radius
+    self.data_puffs['x_plus_radius'] = self.data_puffs.x + self.data_puffs.radius
+    self.data_puffs['y_minus_radius'] = self.data_puffs.y - self.data_puffs.radius
+    self.data_puffs['y_plus_radius'] = self.data_puffs.y + self.data_puffs.radius
+    self.data_puffs['concentration'] = (min_radius/self.data_puffs.radius)**3
+
   def reset(self):
     """
     return Gym.Observation
     """
-    self.dynamic.reset()
     self.episode_reward = 0
     self.episode_step = 0 # skip_steps already done during loading
     # Add randomness to start time PER TRIAL!
+    self.step_offset = self.get_initial_step_offset(self.time_algo)
+    self.t_val = self.t_vals[self.episode_step + self.step_offset] 
+    self.t_val_max_episode = self.t_val + 1.0*self.episode_steps_max/self.fps + 1.0
+    self.tidx = self.tidxs[self.episode_step + self.step_offset] # Use tidx when possible
+    self.tidx_min_episode = self.tidx
+    self.tidx_max_episode = self.tidx + self.episode_steps_max*int(100/self.fps) + self.fps 
+
+    # SPEEDUP (subset puffs to those only needed for episode)
+    # self.data_puffs = self.data_puffs_all.query('(time > @self.t_val-1) and (time < @self.t_val_max_episode)') # Speeds up queries!
+    self.data_puffs = self.data_puffs_all.query('(tidx >= @self.tidx-1) and (tidx <= @self.tidx_max_episode)') # Speeds up queries!
+
+    # Dynamic birthx for each episode
+    if self.birthx < 0.99:
+        puff_sparsity = np.clip(np.random.uniform(low=self.birthx, high=1.0), 0.0, 1.0)
+        drop_idxs = self.data_puffs['puff_number'].unique()
+        drop_idxs = pd.Series(drop_idxs).sample(frac=(1.00-puff_sparsity))
+        self.data_puffs = self.data_puffs.query("puff_number not in @drop_idxs") # No deep copy being made
+
+    if self.diffusion_min < (self.diffusion_max - 0.01):
+        diffx = np.random.uniform(low=self.diffusion_min, high=self.diffusion_max)
+        self.diffusion_adjust(diffx)
+
+    # Generalization: Randomly flip plume data across x_axis
+    if self.flipping:
+        self.flipx = -1.0 if np.random.uniform() > 0.5 else 1.0 
+    else:
+        self.flipx = 1.0
+    # if self.flipx < 0:
+    #     self.data_wind = self.data_wind_all.copy(deep=True)
+    #     self.data_wind.loc[:,'wind_y'] *= self.flipx
+    #     self.data_puffs = self.data_puffs.copy(deep=True)
+    #     self.data_puffs.loc[:,'y'] *= self.flipx 
+    #     # print(self.data_puffs.shape)
+    # else:
+    #     self.data_wind = self.data_wind_all
+
+    self.data_wind = self.data_wind_all
 
     # Initialize agent to random location 
-
-    self.agent_location = self.dynamic.get_initial_location(self.loc_algo)
-    # if self.loc_algo == 'quantile' else self.get_initial_location(self.loc_algo)
+    # self.agent_location = self.get_initial_location(algo='quantile')
+    self.agent_location = self.get_initial_location(self.loc_algo)
     self.agent_location_last = self.agent_location
     self.agent_location_init = self.agent_location
 
-    self.stray_distance = self.dynamic.get_stray_distance(self.agent_location)
+    self.stray_distance = self.get_stray_distance()
     self.stray_distance_last = self.stray_distance
 
     self.agent_angle = self.get_initial_angle(self.angle_algo)
@@ -483,7 +446,7 @@ class PlumeEnvironment(gym.Env):
     self.agent_velocity_last = np.array([0, 0])
 
     # self.wind_ground = self.get_current_wind_xy() # Observe after flip
-    self.wind_ground = self.dynamic.get_current_wind_xy() # Observe after flip
+    self.wind_ground = self.get_current_wind_xy() # Observe after flip
     if self.odor_scaling:
         self.odorx = np.random.uniform(low=0.5, high=1.5) # Odor generalize
     observation = self.sense_environment()
@@ -495,8 +458,23 @@ class PlumeEnvironment(gym.Env):
 
 
   def get_oob(self):
+    # better restricted bounds    
+    # bbox = {'x_min':-2, 'x_max':15, 'y_min':-5, 'y_max':5 }    
+    # is_outofbounds = (self.agent_location[0] < bbox['x_min']) or \
+    #                  (self.agent_location[0] > bbox['x_max']) or \
+    #                  (self.agent_location[1] < bbox['y_min']) or \
+    #                  (self.agent_location[1] > bbox['y_max']) 
+
     is_outofbounds = self.stray_distance > self.stray_max # how far agent can be from closest puff-center
+    # if 'switch' in self.dataset: # large perturbations
+    #     # bbox = {'x_min':-0.5, 'x_max':10, 'y_min':-3, 'y_max':3 }    
+
     return is_outofbounds
+
+  def get_current_wind_xy(self):
+    # df_idx = self.data_wind.query("time == {}".format(self.t_val)).index[0] # Safer
+    df_idx = self.data_wind.query(f"tidx == {self.tidx}").index[0] # Safer
+    return self.data_wind.loc[df_idx,['wind_x', 'wind_y']].tolist() # Safer
 
   # "Transition function"
   def step(self, action):
@@ -506,10 +484,19 @@ class PlumeEnvironment(gym.Env):
     self.episode_step += 1 
     self.agent_location_last = self.agent_location
     # Update internal variables
-    self.stray_distance_last = self.stray_distance
-    self.stray_distance = self.dynamic.get_stray_distance(self.agent_location)
+    try:
+        self.tidx = self.tidxs[self.episode_step + self.step_offset]
+        self.t_val = self.t_vals[self.episode_step + self.step_offset]
+    except Exception as ex:
+        # Debug case where the env tries to access t_val outside puff_data!
+        print(ex, self.episode_step, self.step_offset, self.t_val_min, self.t_vals[-5:], self.tidxs[-5:])
+        sys.exit(-1)
     
-    self.wind_ground = self.dynamic.get_current_wind_xy()
+    self.stray_distance_last = self.stray_distance
+    self.stray_distance = self.get_stray_distance()
+    
+    self.wind_ground = self.get_current_wind_xy()
+    # print(self.wind_ground)
 
     # Unpack action
     if self.verbose > 1:
@@ -522,11 +509,22 @@ class PlumeEnvironment(gym.Env):
     turn_action = action[1] # Typically between [0.0, 1.0]
     # print(action)
 
+    # Action: Clip & self.rescale to support more algorithms
+    # assert move_action >= 0 and move_action <= 1.0
+    # assert turn_action >= 0 and turn_action <= 1.0
+    if self.rescale:
+        move_action = np.clip(move_action, -1.0, 1.0)
+        move_action = (move_action + 1)/2 
+        turn_action = np.clip(turn_action, -1.0, 1.0)
+        turn_action = (turn_action + 1)/2 
+
     # Action noise (multiplicative)
     move_action *= 1.0 + np.random.uniform(-self.act_noise, +self.act_noise) 
     turn_action *= 1.0 + np.random.uniform(-self.act_noise, +self.act_noise) 
 
-    # Action: Clip & self.rescale to support more algorithms
+    if self.flipping and self.flipx < 0:
+    	turn_action = 1 - turn_action
+
     # Turn/Update orientation and move to new location 
     old_angle_radians = np.angle( self.agent_angle[0] + 1j*self.agent_angle[1], deg=False )
     new_angle_radians = old_angle_radians + self.turn_capacity*self.turnx*(turn_action - 0.5)*self.dt # in radians
@@ -552,6 +550,19 @@ class PlumeEnvironment(gym.Env):
     is_outofbounds = self.get_oob()
     done = bool(is_home or is_outofbounds or is_outoftime)
 
+    # Autocurricula
+    # 0.999**1000 = 0.37
+    # 0.998**1000 = 0.16
+    # 0.997**1000 = 0.05
+    # 0.996**1000 = 0.02
+    # 0.995**1000 = 0.007
+    # 0.99**400 = 0.02
+    # 0.95**100 = 0.006
+    if is_home and self.auto_movex:
+        self.movex = 1 + 0.95*(self.movex - 1)
+    if is_home and self.auto_reward:
+        self.reward_decay *= 0.995
+
     # Observation
     observation = self.sense_environment()
 
@@ -561,58 +572,28 @@ class PlumeEnvironment(gym.Env):
         reward += 5*self.rewards['tick']
 
     # Reward shaping         
-    if is_outofbounds and 'oob_fixed' in self.r_shaping:
+    if is_outofbounds and 'oob' in self.r_shaping:
         # Going OOB should be worse than radial reward shaping
         # OOB Overshooting should be worse!
-        oob_penalty = 10
-        # oob_penalty *= 2 if self.agent_location[0] < 0 else 1  
+        oob_penalty = 5*np.linalg.norm(self.agent_location) + self.stray_distance
+        oob_penalty *= 2 if self.agent_location[0] < 0 else 1  
         reward -= oob_penalty
-
-    if is_outofbounds and 'oob_loc' in self.r_shaping:
-        oob_penalty = 5*np.linalg.norm(self.agent_location) + 5*self.stray_distance
-        # oob_penalty *= 2 if self.agent_location[0] < 0 else 1  
-        reward -= oob_penalty
-
-             
-    # X distance decrease at each STEP of episode
-    r_xstep = 0
-    if 'xstep' in self.r_shaping:
-        r_xstep = 5*(self.agent_location_last[0] - self.agent_location[0])
-        r_xstep = min(0, r_xstep) if observation[2] <= config.env['odor_threshold'] else r_xstep
-        # Multiplier for overshooting source
-        # if ('stray' in self.r_shaping) and (self.stray_distance > self.stray_max/3):
-        #         r_xstep += 2.5*(self.stray_distance_last - self.stray_distance)
-        reward += r_xstep * self.reward_decay
-
-    # New Stray rewards/penalties
-    # Additive reward for reducing stray distance from plume
-    if ('stray_delta' in self.r_shaping) and (self.stray_distance > self.stray_max/4):
-        reward += 1*(self.stray_distance_last - self.stray_distance) # higher when stray reducing 
-    if ('stray_abs' in self.r_shaping) and (self.stray_distance > self.stray_max/4):
-        # print("r_xstep, stray_abs: ", r_xstep, -0.1*self.stray_distance)
-        reward += -0.05*self.stray_distance # 
-
-    # Y-stray decrease at each STEP of episode
-    r_ystray = 0
-    # if 'ystray' in self.r_shaping:
-    #     r_ystray = -0.1*ystray
-    #     # print(reward, r_ystray, y_median, self.agent_location[1])
-    #     reward += r_ystray * self.reward_decay
+         
 
 
     # Radial distance decrease at each STEP of episode
     r_radial_step = 0
     if 'step' in self.r_shaping:
         r_radial_step = 5*( np.linalg.norm(self.agent_location_last) - np.linalg.norm(self.agent_location) )
+        r_radial_step = min(0, r_radial_step) if observation[2] <= config.env['odor_threshold'] else r_radial_step
         # Multiplier for overshooting source
-        # if 'overshoot' in self.r_shaping and self.agent_location[0] < 0:
-        #     r_radial_step *= 2 # Both encourage and discourage agent more
+        if 'overshoot' in self.r_shaping and self.agent_location[0] < 0:
+            r_radial_step *= 2 # Both encourage and discourage agent more
+        # Additive reward for reducing stray distance from plume
+        if ('stray' in self.r_shaping) and (self.stray_distance > self.stray_max/3):
+                r_radial_step += 1*(self.stray_distance_last - self.stray_distance)
         reward += r_radial_step * self.reward_decay
 
-    if 'step_pos' in self.r_shaping:
-        r_radial_step = 5*( np.linalg.norm(self.agent_location_last) - np.linalg.norm(self.agent_location) )
-        r_radial_step = min(0, r_radial_step) if observation[2] <= config.env['odor_threshold'] else r_radial_step
-        reward += r_radial_step * self.reward_decay
 
     # Walking agent: Metabolic cost: penalize forward movement
     r_metabolic = 0 # for logging
@@ -625,22 +606,17 @@ class PlumeEnvironment(gym.Env):
 
     # Radial distance decrease at END of episode    
     radial_distance_reward = 0 # keep for logging
-    if done and 'end_pos' in self.r_shaping:
-        reward += 12/(1+np.linalg.norm(self.agent_location)) if observation[2] > config.env['odor_threshold'] else 0
-
     if done and 'end' in self.r_shaping:
-        reward -= np.linalg.norm(self.agent_location)
-        # reward -= np.linalg.norm(self.agent_location) + self.stray_distance
         # 1: Radial distance r_decreasease at end of episode
-        # radial_distance_decrease = ( np.linalg.norm(self.agent_location_init) - np.linalg.norm(self.agent_location) )
+        radial_distance_decrease = ( np.linalg.norm(self.agent_location_init) - np.linalg.norm(self.agent_location) )
         # radial_distance_reward = radial_distance_decrease - np.linalg.norm(self.agent_location)
         # reward += radial_distance_reward 
         # reward -= np.linalg.norm(self.agent_location)
         # end_reward = -np.linalg.norm(self.agent_location)*(1+self.stray_distance) + radial_distance_decrease
-        # self.stray_distance = self.dynamic.get_stray_distance(self.agent_location, max_samples=3000) # Highest quality
+        self.stray_distance = self.get_stray_distance()
         # end_reward = -2*self.stray_distance # scale to be comparable with sum_T(r_step)
-        # end_reward = radial_distance_decrease - self.stray_distance
-        # reward += 5*(end_reward)
+        end_reward = radial_distance_decrease - self.stray_distance
+        reward += end_reward
 
     r_location = 0 # incorrect, leads to cycling in place
     if 'loc' in self.r_shaping:
@@ -660,14 +636,9 @@ class PlumeEnvironment(gym.Env):
             reward += 10
             self.found_plume = True
 
+
     reward = reward*self.rewardx # Scale reward for A3C
-
-    if is_home and self.auto_reward:
-        self.dynamic.diff_min *= 1.01
-        self.dynamic.diff_max *= 1.01
-        self.dynamic.diff_min = min(self.dynamic.diff_min, 0.4)
-        self.dynamic.diff_max = min(self.dynamic.diff_max, 0.8)
-
+    
     # Optional/debug info
     done_reason = "HOME" if is_home else \
         "OOB" if is_outofbounds else \
@@ -684,13 +655,13 @@ class PlumeEnvironment(gym.Env):
         'wind_ground': self.wind_ground,
         'angle': self.agent_angle,
         'reward': reward,
-        'r_dict': {
-            'r_radial_step': r_radial_step,
-            'r_xstep': r_xstep,
-            # 'r_ystray': r_ystray,
-            },
+        'r_radial_step': r_radial_step,
+        # 'reward_decay': self.reward_decay,
+        # 'r_radial_ep': radial_distance_reward,
+        # 'r_metabolic': r_metabolic,
         'movex': self.movex,
         'done': done_reason if done else None,
+        # 'outcomes': self.outcomes,
         'radiusx': self.radiusx,
         }
 
@@ -711,7 +682,7 @@ class PlumeEnvironment(gym.Env):
         observation = np.concatenate([observation, action])
 
     if self.flipping and self.flipx < 0:
-        observation[1] *= -1.0 # observation: [x, y, o] 
+    	observation[1] *= -1.0 # observation: [x, y, o] 
 
     self.episode_reward += reward
     if done:
@@ -727,51 +698,53 @@ class PlumeEnvironment(gym.Env):
     return
 
   def close(self):
+    del self.data_puffs_all
+    del self.data_wind_all
     pass
 
 
 
 #### 
-# class PlumeEnvironmentDiscreteActionWrapper(PlumeEnvironment):
-#     """
-#     TODO: Describe discrete actions
-#     """
-#     def __init__(self, dummy, **kwargs):
-#         self.venv = PlumeEnvironment(**kwargs)
-#         # Discrete action agent maintains current state: move-step and turn-step
-#         self.agent_movestep_DA = 0 # Used when discrete action space
-#         self.agent_turnstep_DA = 0 # Used when discrete action space
+class PlumeEnvironmentDiscreteActionWrapper(PlumeEnvironment):
+    """
+    TODO: Describe discrete actions
+    """
+    def __init__(self, dummy, **kwargs):
+        self.venv = PlumeEnvironment(**kwargs)
+        # Discrete action agent maintains current state: move-step and turn-step
+        self.agent_movestep_DA = 0 # Used when discrete action space
+        self.agent_turnstep_DA = 0 # Used when discrete action space
 
-#         self.action_space = spaces.MultiDiscrete([ [0,2], [0, 2] ])
-#         self.observation_space = self.venv.observation_space
+        self.action_space = spaces.MultiDiscrete([ [0,2], [0, 2] ])
+        self.observation_space = self.venv.observation_space
 
-#     def step(self, action):
-#         # TODO - Discretize actions
-#         # print(action, type(action))
-#         # assert isinstance(action, tuple)
-#         delta_move = (action[0]-1)*self.move_capacity/2 # 0,1,2 --> -delta,0,+delta
-#         self.agent_movestep_DA = np.clip(self.agent_movestep_DA + delta_move, 0.0, self.move_capacity)  
+    def step(self, action):
+        # TODO - Discretize actions
+        # print(action, type(action))
+        # assert isinstance(action, tuple)
+        delta_move = (action[0]-1)*self.move_capacity/2 # 0,1,2 --> -delta,0,+delta
+        self.agent_movestep_DA = np.clip(self.agent_movestep_DA + delta_move, 0.0, self.move_capacity)  
 
-#         delta_turn = (action[1]-1)*1.0/8 # 0,1,2 --> -delta,0,+delta
-#         self.agent_turnstep_DA = self.agent_turnstep_DA + delta_turn  # Used when discrete action space
-#         self.agent_turnstep_DA = np.clip(self.agent_turnstep_DA, -1.0, 1.0)
-#         move_action = self.agent_movestep_DA
-#         turn_action = self.agent_turnstep_DA
-#         # print("turn_action, delta_turn", turn_action, delta_turn)
-#         # print("move_action, delta_move", move_action, delta_move)
+        delta_turn = (action[1]-1)*1.0/8 # 0,1,2 --> -delta,0,+delta
+        self.agent_turnstep_DA = self.agent_turnstep_DA + delta_turn  # Used when discrete action space
+        self.agent_turnstep_DA = np.clip(self.agent_turnstep_DA, -1.0, 1.0)
+        move_action = self.agent_movestep_DA
+        turn_action = self.agent_turnstep_DA
+        # print("turn_action, delta_turn", turn_action, delta_turn)
+        # print("move_action, delta_move", move_action, delta_move)
 
-#         observations, rewards, dones, infos = self.venv.step(action)
-#         return observations, rewards, dones, infos
+        observations, rewards, dones, infos = self.venv.step(action)
+        return observations, rewards, dones, infos
 
-#     def reset(self):
-#         obs = self.venv.reset()
-#         return obs
+    def reset(self):
+        obs = self.venv.reset()
+        return obs
 
-#     def render(self, mode):
-#         self.venv.render(mode)
+    def render(self, mode):
+        self.venv.render(mode)
 
-#     def close(self):
-#         self.venv.close()
+    def close(self):
+        self.venv.close()
 
 
 class PlumeFrameStackEnvironment(gym.Env):
@@ -841,6 +814,9 @@ class PlumeFrameStackEnvironment(gym.Env):
         self.stackedobs[...] = 0
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs
+
+    def seed(self, seed=None):
+        return self.venv.seed(seed)
 
     def render(self, mode):
         self.venv.render(mode)

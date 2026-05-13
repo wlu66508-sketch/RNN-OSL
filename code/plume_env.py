@@ -38,7 +38,7 @@ class PlumeEnvironment(gym.Env):
     qvar=1.0, # Variance of init. location; higher = more off-plume initializations
     time_algo='uniform',
     angle_algo='uniform',
-    homed_radius=0.2, # meters, at which to end flying episode
+    homed_radius=0.5, # meters, at which to end flying episode
     stray_max=2.0, # meters, max distance agent can stray from plume
     wind_rel=True, # Agent senses relative wind speed (not ground speed)
     auto_movex=False, # simple autocurricula for movex
@@ -196,7 +196,7 @@ class PlumeEnvironment(gym.Env):
     if self.walking:
         self.turn_capacity = walk_turn 
         self.move_capacity = walk_move 
-        self.homed_radius = 0.02 # m i.e. 18cm walk from 0.20m (flying "homed" distance)
+        self.homed_radius = 0.05 # m i.e. walking mode (1/10 of flying 0.5m homed distance)
         self.stray_max = 2.0 # meters; keep the same tolerance as flying
         # self.rewards['tick'] = -1/self.episode_steps_max
 
@@ -375,7 +375,7 @@ class PlumeEnvironment(gym.Env):
     return agent_angle
 
   def diffusion_adjust(self, diffx):
-    min_radius = 0.02
+    min_radius = float(config.env.get('puff_initial_radius', 0.05))
     self.data_puffs.loc[:,'radius'] -= min_radius # subtract initial radius
     self.data_puffs.loc[:,'radius'] *= diffx/self.diffusion_max  # adjust 
     self.data_puffs.loc[:,'radius'] += min_radius # add back initial radius

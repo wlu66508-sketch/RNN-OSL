@@ -16,10 +16,7 @@ import matplotlib
 import config
 np.random.seed(config.seed_global)
 
-try:
-    import mpl_scatter_density  # optional plotting backend
-except ModuleNotFoundError:
-    mpl_scatter_density = None
+import mpl_scatter_density
 
 def get_puff_birthtime(data_puffs, puff_number):
     p = data_puffs[data_puffs.puff_number==puff_number].time.values
@@ -209,7 +206,7 @@ def load_plume(
         print("Applying radius_multiplier", radius_multiplier)
         data_puffs.loc[:,'radius'] *= radius_multiplier
 
-    min_radius = float(config.env.get('puff_initial_radius', 0.05))
+    min_radius = 0.02
 
     # Adjust diffusion rate
     if diffusion_multiplier != 1.0:

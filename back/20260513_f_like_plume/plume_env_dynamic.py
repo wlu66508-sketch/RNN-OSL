@@ -163,9 +163,7 @@ class DynamicPlume:
         Y_mean + varx*Y_var*np.random.randn()]) 
     return loc_xy
 
-  def get_concentration(self, x_val, y_val, min_radius=None, extent=0.0):
-    if min_radius is None:
-        min_radius = float(config.env.get('puff_initial_radius', 0.05))
+  def get_concentration(self, x_val, y_val, min_radius=0.01, extent=0.0):
     if 'concentration' not in self.puffs.columns:
         self.puffs['x_minus_radius'] = self.puffs.x - self.puffs.radius
         self.puffs['x_plus_radius'] = self.puffs.x + self.puffs.radius
@@ -202,7 +200,7 @@ class PlumeEnvironment(gym.Env):
     qvar=1.0, # Variance of init. location; higher = more off-plume initializations
     time_algo='uniform',
     angle_algo='uniform',
-    homed_radius=0.5, # meters, at which to end flying episode
+    homed_radius=0.2, # meters, at which to end flying episode
     stray_max=2.0, # meters, max distance agent can stray from plume
     wind_rel=True, # Agent senses relative wind speed (not ground speed)
     auto_movex=False, # simple autocurricula for movex

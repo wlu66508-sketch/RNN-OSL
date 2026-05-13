@@ -202,7 +202,7 @@ class PlumeEnvironment(gym.Env):
     qvar=1.0, # Variance of init. location; higher = more off-plume initializations
     time_algo='uniform',
     angle_algo='uniform',
-    homed_radius=0.5, # meters, at which to end flying episode
+    homed_radius=0.2, # meters, at which to end flying episode
     stray_max=2.0, # meters, max distance agent can stray from plume
     wind_rel=True, # Agent senses relative wind speed (not ground speed)
     auto_movex=False, # simple autocurricula for movex

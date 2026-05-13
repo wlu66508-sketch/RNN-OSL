@@ -24,27 +24,6 @@ import tqdm
 import config
 np.random.seed(config.seed_global)
 
-PUFF_INITIAL_RADIUS = float(config.env.get('puff_initial_radius', 0.05))
-PUFF_DIFFUSION_GAMMA = float(config.env.get('puff_diffusion_gamma', 0.002))
-PLUME_TRIM_BOUNDS = config.env.get('plume_trim_bounds', {
-    'x_min': -2,
-    'x_max': 30,
-    'y_min': -15,
-    'y_max': 15,
-})
-
-
-def trim_puffs(puff_df):
-    bounds = PLUME_TRIM_BOUNDS
-    keep = (
-        (puff_df['radius'] > 0) &
-        (puff_df['x'] < bounds['x_max']) &
-        (puff_df['x'] > bounds['x_min']) &
-        (puff_df['y'] < bounds['y_max']) &
-        (puff_df['y'] > bounds['y_min'])
-    )
-    return puff_df.loc[keep].copy()
-
 
 # from config import sim as simc
 from numba import jit # TODO
@@ -245,7 +224,7 @@ def puff_wind_diff_eq(xyr, t, *args):
     xdot = wind_x[idx]
     ydot = wind_y[idx]
 
-    rdot = PUFF_DIFFUSION_GAMMA / (2 * max(r, PUFF_INITIAL_RADIUS))
+    rdot = 0.01
 
     return [xdot, ydot, rdot]   
 
@@ -254,7 +233,7 @@ def integrate_puff_from_birth(args):
     T, wind_x, wind_y, birth_index, seed = args
     # Simulate once
 
-    xyr_0 = [0,0,PUFF_INITIAL_RADIUS] # initial x, y, radius
+    xyr_0 = [0,0,0.02] # initial x, y, radius
     dt = 0.01
     # wind_x, wind_y = get_wind_vectors_original(T, 
     #     local_state=local_state, 
@@ -315,7 +294,7 @@ def get_puffs_raw(T, wind_x, wind_y, birth_rate, ncores=2, verbose=True):
 def integrate_puff_from_birth_df(args):
     T, tidxs, wind_x, wind_y, wind_y_var, birth_index, puff_index, seed = args
 
-    xyr_0 = [0,0,PUFF_INITIAL_RADIUS] # initial x, y, radius
+    xyr_0 = [0,0,0.02] # initial x, y, radius
     dt = 0.01
 
     # Add some y-direction variation per puff
@@ -337,7 +316,7 @@ def integrate_puff_from_birth_df(args):
         })
 
     # Postprocessing 
-    puff_df = trim_puffs(puff_df)
+    puff_df = puff_df.query("(radius != 0) & (x<10) & (y<10) & (x>-2) & (y>-10)")
 
     return puff_df
 
@@ -405,41 +384,38 @@ def gen_puff_dict(puff_number, tidx):
      'time': np.float64(tidx)/100.,
      'x': 0.0,
      'y': 0.0,
-     'radius': PUFF_INITIAL_RADIUS,
-     # 'x_minus_radius': -PUFF_INITIAL_RADIUS,
-     # 'x_plus_radius': PUFF_INITIAL_RADIUS,
-     # 'y_minus_radius': -PUFF_INITIAL_RADIUS,
-     # 'y_plus_radius': PUFF_INITIAL_RADIUS,
+     'radius': 0.02,
+     # 'x_minus_radius': -0.01,
+     # 'x_plus_radius': 0.01,
+     # 'y_minus_radius': -0.01,
+     # 'y_plus_radius': 0.01,
      # 'concentration': 1.0,
      'tidx': tidx,
     }
     
 def grow_puffs(birth_rate, puff_t, tidx):
     num_births = sp.stats.poisson.rvs(birth_rate, size=1)[0]
-    last_puff_number = puff_t['puff_number'].max()
-    puff_number = 0 if pd.isna(last_puff_number) else int(last_puff_number) + 1
+    puff_number = puff_t['puff_number'].max() + 1
     
     new_rows = [ gen_puff_dict(puff_number+i, tidx) for i in range(num_births)]    
     new_rows = pd.DataFrame( new_rows )
-    return pd.concat([puff_t, new_rows], ignore_index=True)
+    return pd.concat([puff_t, new_rows])
     
 def manual_integrator(puff_t, wind_t, tidx,
                       dt=np.float64(0.01), 
-                      rdot=None, 
+                      rdot=0.01, 
                       birth_rate=1.0, 
-                      min_radius=PUFF_INITIAL_RADIUS, 
-                      wind_y_var=0.5,
-                      diffusion_gamma=PUFF_DIFFUSION_GAMMA):
+                      min_radius=0.01, 
+                      wind_y_var=0.5):
     n_puffs = len(puff_t)
     puff_t['x'] += wind_t['wind_x'].item()*dt
     puff_t['y'] += wind_t['wind_y'].item()*dt + np.random.normal(0, wind_y_var, size=n_puffs)*dt
-    radius = np.maximum(puff_t['radius'].astype(float), min_radius)
-    puff_t['radius'] = np.sqrt(radius*radius + diffusion_gamma*dt)
+    puff_t['radius'] += dt * rdot
     puff_t['tidx'] = tidx
     puff_t['time'] = wind_t['time'].item()
     
     # Trim plume
-    puff_t = trim_puffs(puff_t)
+    puff_t = puff_t.query("(radius > 0) & (x<10) & (y<10) & (x>-2) & (y>-10)")
 
     # Grow plume
     puff_t = grow_puffs(birth_rate, puff_t, tidx)
