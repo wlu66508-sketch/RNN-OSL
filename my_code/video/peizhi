@@ -396,6 +396,12 @@ git remote add origin https://github.com/wlu66508-sketch/RNN-OSL.git
 git branch -M main
 git push -u origin main
 
+cd /home/wanglu/code/DQN/plumetracknets
+
+git status
+git add .
+git commit -m "更新说明"
+git push
 
 
 
@@ -408,3 +414,104 @@ git push -u origin main
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cd /home/wanglu/code/DQN/plumetracknets/code/ppo
+
+SAVEDIR=/mnt/hgfs/Desktop/RNN_OSL/trained_models/stratified_3wind_test
+mkdir -p "$SAVEDIR"
+
+MPLCONFIGDIR=/tmp PYTHONPATH=.. python -u main.py \
+  --env-name plume \
+  --recurrent-policy \
+  --stratified-dataset-sampling \
+  --scenario-names constant light_crosswind target_crosswind \
+  --train-seed-start 1 \
+  --train-seed-end 39 \
+  --eval-seed-start 40 \
+  --eval-seed-end 50 \
+  --dataset constantx20b5_s1 \
+  --num-env-steps 30000000 \
+  --num-processes 6 \
+  --num-mini-batch 6 \
+  --num-steps 2048 \
+  --log-interval 1 \
+  --eval-interval 20 \
+  --eval_episodes 20 \
+  --save-dir "$SAVEDIR" \
+  --eval_type skip \
+  --walking True \
+  --env_dt 0.5 \
+  --sim_steps_max 300 \
+  --birthx 0.3 \
+  --qvar 2.0 \
+  --diff_max 0.8 \
+  --diff_min 0.7 \
+  --r_shaping step oob \
+  --algo ppo \
+  --seed 1 \
+  --squash_action True \
+  --odor_scaling True \
+  --rnn_type VRNN \
+  --hidden_size 64 \
+  --weight_decay 0.0001 \
+  --use-gae \
+  --lr 3e-4 \
+  --entropy-coef 0.005 \
+  --value-loss-coef 0.5 \
+  --ppo-epoch 10 \
+  --gamma 0.99 \
+  --gae-lambda 0.95 \
+  --use-linear-lr-decay \
+  --outsuffix stratified_3wind_3M
+
+
+--train-seed-start 0 \
+--train-seed-end 39 \
+
+
+
+
+(vitst) wanglu@wanglu-virtual-machine:~/code/DQN/plumetracknets/code$ cd /home/wanglu/code/DQN/plumetracknets/code
+
+OUTDIR=/mnt/hgfs/Desktop/RNN_OSL
+mkdir -p ${OUTDIR}/logs
+
+for SEED in $(seq 1 25); do
+  for DATASET in constant light_crosswind target_crosswind; do
+    echo "Generating ${DATASET}x20b5_s${SEED}"
+
+    MPLCONFIGDIR=/tmp python -u sim_cli.py \
+      --duration 300 \
+      --dataset_name ${DATASET} \
+      --fname_suffix x20b5_s${SEED} \
+      --wind_magnitude 2.0 \
+      --wind_y_varx 4 \
+      --birth_rate 1.0 \
+      --seed ${SEED} \
+      --outdir ${OUTDIR} \
+      > ${OUTDIR}/logs/${DATASET}x20b5_s${SEED}.log 2>&1
+  done
+done

@@ -214,6 +214,24 @@ def get_args():
     parser.add_argument('--birthx',  type=float, nargs='+', default=[1.0])
     parser.add_argument('--diff_max',  type=float, nargs='+', default=[0.8])
     parser.add_argument('--diff_min',  type=float, nargs='+', default=[0.4])
+    parser.add_argument('--random-dataset-per-episode', action='store_true',
+        default=False,
+        help='sample a new dataset from the assigned pool on each env reset')
+    parser.add_argument('--stratified-dataset-sampling', action='store_true',
+        default=False,
+        help='assign scenario-specific dataset pools to env ranks')
+    parser.add_argument('--scenario-names', type=str, nargs='+', default=[],
+        help='scenario prefixes, e.g. constant light_crosswind target_crosswind')
+    parser.add_argument('--train-seed-start', type=int, default=None,
+        help='first training seed used to build scenario dataset pools')
+    parser.add_argument('--train-seed-end', type=int, default=None,
+        help='last training seed used to build scenario dataset pools')
+    parser.add_argument('--eval-seed-start', type=int, default=None,
+        help='first validation seed used to build scenario eval dataset pools')
+    parser.add_argument('--eval-seed-end', type=int, default=None,
+        help='last validation seed used to build scenario eval dataset pools')
+    parser.add_argument('--dataset-suffix', type=str, default='x20b5_s',
+        help='text between scenario name and seed, e.g. x20b5_s')
 
     parser.add_argument('--birthx_max',  type=float, default=1.0) # Only used for sparsity
     parser.add_argument('--dryrun',  type=bool, default=False)
@@ -247,6 +265,25 @@ def get_args():
 
     args = parser.parse_args()
 
+    if args.stratified_dataset_sampling:
+        if not args.scenario_names:
+            raise ValueError("--stratified-dataset-sampling requires --scenario-names")
+        if args.train_seed_start is None or args.train_seed_end is None:
+            raise ValueError("--stratified-dataset-sampling requires --train-seed-start and --train-seed-end")
+        if args.train_seed_end < args.train_seed_start:
+            raise ValueError("--train-seed-end must be >= --train-seed-start")
+        if args.num_processes < len(args.scenario_names):
+            raise ValueError("--num-processes must be at least the number of scenarios")
+        args.random_dataset_per_episode = True
+
+    if (args.eval_seed_start is None) != (args.eval_seed_end is None):
+        raise ValueError("--eval-seed-start and --eval-seed-end must be set together")
+    if args.eval_seed_start is not None:
+        if args.eval_seed_end < args.eval_seed_start:
+            raise ValueError("--eval-seed-end must be >= --eval-seed-start")
+        if not args.scenario_names:
+            raise ValueError("--eval-seed-start/--eval-seed-end require --scenario-names")
+
     # args.cuda = not args.no_cuda and 
     args.cuda = cuda_available
     print("CUDA:", args.cuda)
@@ -254,6 +291,86 @@ def get_args():
 
     print(args)
     return args
+
+
+def build_scenario_dataset_pool(scenario, suffix, seed_start, seed_end):
+    return [
+        f"{scenario}{suffix}{seed}"
+        for seed in range(seed_start, seed_end + 1)
+    ]
+
+
+def make_eval_args_for_scenario(args, scenario, scenario_idx):
+    eval_seed_start = (
+        args.eval_seed_start
+        if args.eval_seed_start is not None
+        else args.train_seed_start
+    )
+    eval_seed_end = (
+        args.eval_seed_end
+        if args.eval_seed_end is not None
+        else args.train_seed_end
+    )
+    dataset_pool = build_scenario_dataset_pool(
+        scenario,
+        args.dataset_suffix,
+        eval_seed_start,
+        eval_seed_end,
+    )
+
+    eval_args = copy.copy(args)
+    eval_args.dataset = dataset_pool if len(dataset_pool) > 1 else dataset_pool[0]
+    eval_args.random_dataset_per_episode = len(dataset_pool) > 1
+    eval_args.stratified_dataset_sampling = False
+    eval_args.num_processes = 1
+    eval_args.seed = args.seed + 1000 + scenario_idx
+    return eval_args
+
+
+def make_training_eval_envs(args, device):
+    if args.eval_interval is None:
+        return None
+
+    seed_start = (
+        args.eval_seed_start
+        if args.eval_seed_start is not None
+        else args.train_seed_start
+    )
+    seed_end = (
+        args.eval_seed_end
+        if args.eval_seed_end is not None
+        else args.train_seed_end
+    )
+    if args.scenario_names and seed_start is not None and seed_end is not None:
+        eval_envs = {}
+        for scenario_idx, scenario in enumerate(args.scenario_names):
+            eval_args = make_eval_args_for_scenario(
+                args, scenario, scenario_idx)
+            eval_envs[scenario] = (
+                eval_args,
+                make_vec_envs(
+                    args.env_name,
+                    eval_args.seed,
+                    num_processes=1,
+                    gamma=args.gamma,
+                    log_dir=args.log_dir,
+                    device=device,
+                    args=eval_args,
+                    allow_early_resets=True,
+                )
+            )
+        return eval_envs
+
+    return make_vec_envs(
+        args.env_name,
+        args.seed + 1000,
+        num_processes=1,
+        gamma=args.gamma,
+        log_dir=args.log_dir,
+        device=device,
+        args=args,
+        allow_early_resets=True)
+
 
 def eval_lite(agent, env, args, device, actor_critic):
     # return None, None
@@ -316,8 +433,9 @@ def training_loop(agent, envs, args, device, actor_critic,
     rollouts.obs[0].copy_(obs)
     rollouts.to(device)
 
-    episode_rewards = deque(maxlen=50) 
+    episode_rewards = deque(maxlen=50)
     best_mean = 0.0
+    best_eval_mean = -np.inf
 
     training_log = training_log if training_log is not None else []
     eval_log = eval_log if eval_log is not None else []
@@ -368,6 +486,7 @@ def training_loop(agent, envs, args, device, actor_critic,
         value_loss, action_loss, dist_entropy = agent.update(rollouts)
 
         rollouts.after_update()
+        total_num_steps = (j + 1) * args.num_processes * args.num_steps
 
         # save for every interval-th episode or for the last epoch
         if (j % args.save_interval == 0
@@ -396,7 +515,6 @@ def training_loop(agent, envs, args, device, actor_critic,
                 print('Saved', fname)
 
         if j % args.log_interval == 0 and len(episode_rewards) > 1:
-            total_num_steps = (j + 1) * args.num_processes * args.num_steps
             end = time.time()
             print(
                 "Update {}/{}, T {}, FPS {}, {}-training-episode: mean/median {:.1f}/{:.1f}, min/max {:.1f}/{:.1f}"
@@ -430,15 +548,59 @@ def training_loop(agent, envs, args, device, actor_critic,
         if (args.eval_interval is not None and len(episode_rewards) > 1
                 and j % args.eval_interval == 0):
             if eval_env is not None:
-                eval_record = eval_lite(agent, eval_env, args, device, actor_critic, )
-                eval_record['T'] = total_num_steps
-                eval_log.append(eval_record)
-                print("eval_lite:", eval_record)
-
                 save_path = args.save_dir # os.path.join(args.save_dir, args.algo)
                 os.makedirs(save_path, exist_ok=True)
-                fname = os.path.join(save_path, f'{args.env_name}_{args.outsuffix}_{args.dataset}_eval.csv')
+                current_eval_r_means = []
+                if isinstance(eval_env, dict):
+                    for scenario, (eval_args, scenario_eval_env) in eval_env.items():
+                        eval_record = eval_lite(
+                            agent, scenario_eval_env, eval_args, device,
+                            actor_critic)
+                        eval_record['update'] = j
+                        eval_record['T'] = total_num_steps
+                        eval_record['scenario'] = scenario
+                        eval_record['eval_seed_start'] = (
+                            eval_args.eval_seed_start
+                            if eval_args.eval_seed_start is not None
+                            else eval_args.train_seed_start
+                        )
+                        eval_record['eval_seed_end'] = (
+                            eval_args.eval_seed_end
+                            if eval_args.eval_seed_end is not None
+                            else eval_args.train_seed_end
+                        )
+                        eval_log.append(eval_record)
+                        current_eval_r_means.append(eval_record['r_mean'])
+                        print("eval_lite:", eval_record)
+
+                    fname = os.path.join(
+                        save_path,
+                        f'{args.env_name}_{args.outsuffix}_eval.csv')
+                else:
+                    eval_record = eval_lite(
+                        agent, eval_env, args, device, actor_critic)
+                    eval_record['update'] = j
+                    eval_record['T'] = total_num_steps
+                    eval_log.append(eval_record)
+                    current_eval_r_means.append(eval_record['r_mean'])
+                    print("eval_lite:", eval_record)
+
+                    fname = os.path.join(save_path, f'{args.env_name}_{args.outsuffix}_{args.dataset}_eval.csv')
                 pd.DataFrame(eval_log).to_csv(fname)
+
+                # Save best model based on mean eval reward across all scenarios
+                if current_eval_r_means:
+                    current_eval_mean = np.mean(current_eval_r_means)
+                    if current_eval_mean > best_eval_mean:
+                        best_eval_mean = current_eval_mean
+                        fname_best_eval = os.path.join(
+                            save_path,
+                            f'{args.env_name}_{args.outsuffix}.pt.best_eval')
+                        torch.save([
+                            actor_critic,
+                            getattr(utils.get_vec_normalize(envs), 'ob_rms', None)
+                        ], fname_best_eval)
+                        print(f'Saved best_eval model (eval_mean={current_eval_mean:.2f}): {fname_best_eval}')
         #     # ob_rms = utils.get_vec_normalize(envs).ob_rms
         #     ob_rms = None
         #     # evaluate(actor_critic, ob_rms, args.env_name, args.seed,
@@ -505,15 +667,7 @@ def main():
                         False, 
                         args)
 
-    eval_env = make_vec_envs(
-        args.env_name,
-        args.seed + 1000,
-        num_processes=1,
-        gamma=args.gamma, 
-        log_dir=args.log_dir, 
-        device=device,
-        args=args,
-        allow_early_resets=True)
+    eval_env = make_training_eval_envs(args, device)
 
     actor_critic = Policy(
         envs.observation_space.shape,
